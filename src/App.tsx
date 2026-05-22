@@ -772,7 +772,7 @@ export default function App() {
     setIsSyncingRedmine(true);
     let successCount = 0;
     let failCount = 0;
-    let errors: string[] = [];
+    const errors: string[] = [];
 
     for (const task of syncableTasks) {
       try {
@@ -2378,322 +2378,329 @@ export default function App() {
             )}
 
             {activeModule === "spent_time" && (
-              <div style={{ maxWidth: "1000px", margin: "0 auto" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
-                  <div>
-                    <Typography.Title level={4} style={{ margin: 0, fontFamily: "Lora, serif", color: "var(--text-primary)" }}>
-                      Lịch sử ghi nhận công việc (Spent Time)
-                    </Typography.Title>
-                    <Typography.Text type="secondary" style={{ fontSize: "14px" }}>
-                      Xem tất cả thời gian đã báo cáo lên Redmine (người dùng hiện tại)
-                    </Typography.Text>
-                  </div>
-                  <Space>
-                    <Select
-                      value={spentTimeFilter}
-                      onChange={(val) => {
-                        setSpentTimeFilter(val);
-                        setSpentTimePage(1); // Reset page to 1
-                      }}
-                      style={{ width: 150 }}
-                      options={[
-                        { value: "all", label: "Tất cả thời gian" },
-                        { value: "this_month", label: "Tháng này" },
-                        { value: "last_month", label: "Tháng trước" },
-                      ]}
-                    />
-                    {(() => {
-                      const filtered = spentTimeEntries.filter((entry) => {
-                        if (spentTimeFilter === "this_month") {
-                          return entry.spent_on && dayjs(entry.spent_on).isSame(dayjs(), "month");
-                        }
-                        if (spentTimeFilter === "last_month") {
-                          return entry.spent_on && dayjs(entry.spent_on).isSame(dayjs().subtract(1, "month"), "month");
-                        }
-                        return true;
-                      });
-                      const totalHours = filtered.reduce((sum, entry) => sum + (entry.hours || 0), 0);
-                      return (
-                        <Tag color="default" style={{ fontSize: "14px", padding: "6px 12px", borderRadius: "6px", background: "var(--card-bg)", borderColor: "var(--glass-border)", color: "var(--text-primary)", fontWeight: 500 }}>
-                          Tổng cộng: <strong>{totalHours.toFixed(1)} giờ</strong>
-                        </Tag>
-                      );
-                    })()}
-                    <Button 
-                      type="default" 
-                      icon={<ClockCircleOutlined />} 
-                      onClick={handleFetchSpentTime}
-                      loading={isLoadingSpentTime}
-                      style={{ borderRadius: "6px", background: "var(--card-bg)", borderColor: "var(--glass-border)", color: "var(--text-primary)" }}
-                    >
-                      Làm mới
-                    </Button>
-                  </Space>
-                </div>
-
-                {isLoadingSpentTime ? (
-                  <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "300px" }}>
-                    <Spin size="large" tip="Đang tải dữ liệu..." />
-                  </div>
-                ) : (() => {
-                  const filtered = spentTimeEntries.filter((entry) => {
-                    if (spentTimeFilter === "this_month") {
-                      return entry.spent_on && dayjs(entry.spent_on).isSame(dayjs(), "month");
-                    }
-                    if (spentTimeFilter === "last_month") {
-                      return entry.spent_on && dayjs(entry.spent_on).isSame(dayjs().subtract(1, "month"), "month");
-                    }
-                    return true;
-                  });
-
-                  // 1. Generate full dates for this filter period
-                  const allDates = generateDatesForFilter(spentTimeFilter, filtered);
-
-                  if (allDates.length === 0) {
-                    return (
-                      <Card className="glass-panel" style={{ textAlign: "center", padding: "40px" }}>
-                        <Empty description="Không tìm thấy lịch sử báo cáo thời gian phù hợp với bộ lọc" />
-                      </Card>
-                    );
+              <div>
+                <Card
+                  className="glass-panel"
+                  title={
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", flexWrap: "wrap", gap: "12px" }}>
+                      <div>
+                        <span style={{ fontSize: "18px", fontWeight: 600, color: "var(--text-primary)" }}>
+                          Lịch sử ghi nhận công việc (Spent Time)
+                        </span>
+                        <Text type="secondary" style={{ marginLeft: "12px", fontSize: "14px" }}>
+                          Xem tất cả thời gian đã báo cáo lên Redmine (người dùng hiện tại)
+                        </Text>
+                      </div>
+                      <Space>
+                        <Select
+                          value={spentTimeFilter}
+                          onChange={(val) => {
+                            setSpentTimeFilter(val);
+                            setSpentTimePage(1); // Reset page to 1
+                          }}
+                          style={{ width: 150 }}
+                          options={[
+                            { value: "all", label: "Tất cả thời gian" },
+                            { value: "this_month", label: "Tháng này" },
+                            { value: "last_month", label: "Tháng trước" },
+                          ]}
+                        />
+                        {(() => {
+                          const filtered = spentTimeEntries.filter((entry) => {
+                            if (spentTimeFilter === "this_month") {
+                              return entry.spent_on && dayjs(entry.spent_on).isSame(dayjs(), "month");
+                            }
+                            if (spentTimeFilter === "last_month") {
+                              return entry.spent_on && dayjs(entry.spent_on).isSame(dayjs().subtract(1, "month"), "month");
+                            }
+                            return true;
+                          });
+                          const totalHours = filtered.reduce((sum, entry) => sum + (entry.hours || 0), 0);
+                          return (
+                            <Tag color="default" style={{ fontSize: "14px", padding: "6px 12px", borderRadius: "6px", background: "var(--card-bg)", borderColor: "var(--glass-border)", color: "var(--text-primary)", fontWeight: 500 }}>
+                              Tổng cộng: <strong>{totalHours.toFixed(1)} giờ</strong>
+                            </Tag>
+                          );
+                        })()}
+                        <Button 
+                          type="default" 
+                          icon={<ClockCircleOutlined />} 
+                          onClick={handleFetchSpentTime}
+                          loading={isLoadingSpentTime}
+                          style={{ borderRadius: "6px", background: "var(--card-bg)", borderColor: "var(--glass-border)", color: "var(--text-primary)" }}
+                        >
+                          Làm mới
+                        </Button>
+                      </Space>
+                    </div>
                   }
+                  styles={{ header: { borderBottom: "1px solid var(--glass-border)", padding: "16px 24px" } }}
+                  style={{ marginBottom: "24px" }}
+                >
+                  {isLoadingSpentTime ? (
+                    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "300px" }}>
+                      <Spin size="large" tip="Đang tải dữ liệu..." />
+                    </div>
+                  ) : (() => {
+                    const filtered = spentTimeEntries.filter((entry) => {
+                      if (spentTimeFilter === "this_month") {
+                        return entry.spent_on && dayjs(entry.spent_on).isSame(dayjs(), "month");
+                      }
+                      if (spentTimeFilter === "last_month") {
+                        return entry.spent_on && dayjs(entry.spent_on).isSame(dayjs().subtract(1, "month"), "month");
+                      }
+                      return true;
+                    });
 
-                  const groupedSpentTime: { [date: string]: any[] } = {};
-                  allDates.forEach((dStr) => {
-                    groupedSpentTime[dStr] = [];
-                  });
+                    // 1. Generate full dates for this filter period
+                    const allDates = generateDatesForFilter(spentTimeFilter, filtered);
 
-                  filtered.forEach((entry) => {
-                    const date = entry.spent_on || "Không rõ ngày";
-                    if (groupedSpentTime[date] !== undefined) {
-                      groupedSpentTime[date].push(entry);
-                    } else if (spentTimeFilter === "all") {
-                      groupedSpentTime[date] = [entry];
+                    if (allDates.length === 0) {
+                      return (
+                        <Card className="glass-panel" style={{ textAlign: "center", padding: "40px" }}>
+                          <Empty description="Không tìm thấy lịch sử báo cáo thời gian phù hợp với bộ lọc" />
+                        </Card>
+                      );
                     }
-                  });
 
-                  const sortedDates = Object.keys(groupedSpentTime).sort((a, b) => b.localeCompare(a));
-                  
-                  // 2. Pagination slicing
-                  const startIndex = (spentTimePage - 1) * spentTimePageSize;
-                  const endIndex = startIndex + spentTimePageSize;
-                  const paginatedDates = sortedDates.slice(startIndex, endIndex);
+                    const groupedSpentTime: { [date: string]: any[] } = {};
+                    allDates.forEach((dStr) => {
+                      groupedSpentTime[dStr] = [];
+                    });
 
-                  return (
-                    <Row gutter={[16, 16]}>
-                      {paginatedDates.map((date) => {
-                        const entries = groupedSpentTime[date];
-                        const totalDailyHours = entries.reduce((sum, e) => sum + (e.hours || 0), 0);
-                        const dayOfWeek = dayjs(date).day(); // 0: Chủ Nhật, 6: Thứ Bảy
-                        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                    filtered.forEach((entry) => {
+                      const date = entry.spent_on || "Không rõ ngày";
+                      if (groupedSpentTime[date] !== undefined) {
+                        groupedSpentTime[date].push(entry);
+                      } else if (spentTimeFilter === "all") {
+                        groupedSpentTime[date] = [entry];
+                      }
+                    });
 
-                        let cardStyle: React.CSSProperties = { 
-                          borderRadius: "12px", 
-                          border: "1px solid var(--glass-border)",
-                          transition: "all 0.3s",
-                          height: "100%"
-                        };
-                        let headerStyle: React.CSSProperties = { 
-                          borderBottom: "1px solid var(--glass-border)", 
-                          padding: "10px 16px" 
-                        };
-                        let titleColor = "var(--text-primary)";
-                        let tagStyle: React.CSSProperties = {
-                          background: "rgba(94, 93, 89, 0.1)", 
-                          color: "var(--primary-color)", 
-                          border: "none", 
-                          fontWeight: 600, 
-                          fontSize: "12px", 
-                          padding: "2px 8px", 
-                          borderRadius: "10px"
-                        };
-                        let tagText = `${totalDailyHours.toFixed(1)} giờ`;
+                    const sortedDates = Object.keys(groupedSpentTime).sort((a, b) => b.localeCompare(a));
+                    
+                    // 2. Pagination slicing
+                    const startIndex = (spentTimePage - 1) * spentTimePageSize;
+                    const endIndex = startIndex + spentTimePageSize;
+                    const paginatedDates = sortedDates.slice(startIndex, endIndex);
 
-                        if (isWeekend) {
-                          cardStyle = {
-                            ...cardStyle,
-                            background: "rgba(94, 93, 89, 0.03)",
-                            opacity: 0.85
+                    return (
+                      <Row gutter={[16, 16]}>
+                        {paginatedDates.map((date) => {
+                          const entries = groupedSpentTime[date];
+                          const totalDailyHours = entries.reduce((sum, e) => sum + (e.hours || 0), 0);
+                          const dayOfWeek = dayjs(date).day(); // 0: Chủ Nhật, 6: Thứ Bảy
+                          const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+                          let cardStyle: React.CSSProperties = { 
+                            borderRadius: "12px", 
+                            border: "1px solid var(--glass-border)",
+                            transition: "all 0.3s",
+                            height: "100%"
                           };
-                          titleColor = "var(--text-secondary)";
-                          tagStyle = {
-                            ...tagStyle,
-                            background: "rgba(94, 93, 89, 0.08)",
-                            color: "var(--text-secondary)",
+                          let headerStyle: React.CSSProperties = { 
+                            borderBottom: "1px solid var(--glass-border)", 
+                            padding: "10px 16px" 
                           };
-                          tagText = "Nghỉ";
-                        } else if (totalDailyHours === 0) {
-                          // Weekday not logged
-                          if (themeMode === "dark") {
+                          let titleColor = "var(--text-primary)";
+                          let tagStyle: React.CSSProperties = {
+                            background: "rgba(94, 93, 89, 0.1)", 
+                            color: "var(--primary-color)", 
+                            border: "none", 
+                            fontWeight: 600, 
+                            fontSize: "12px", 
+                            padding: "2px 8px", 
+                            borderRadius: "10px"
+                          };
+                          let tagText = `${totalDailyHours.toFixed(1)} giờ`;
+
+                          if (isWeekend) {
                             cardStyle = {
                               ...cardStyle,
-                              border: "1px solid rgba(220, 38, 38, 0.4)",
-                              background: "rgba(220, 38, 38, 0.08)",
+                              background: "rgba(94, 93, 89, 0.03)",
+                              opacity: 0.85
                             };
-                            headerStyle = { ...headerStyle, borderBottom: "1px solid rgba(220, 38, 38, 0.25)" };
-                            titleColor = "#fca5a5";
-                            tagStyle = { ...tagStyle, background: "rgba(220, 38, 38, 0.2)", color: "#fca5a5" };
-                          } else {
-                            cardStyle = {
-                              ...cardStyle,
-                              border: "1px solid #feb2b2",
-                              background: "#fff5f5",
+                            titleColor = "var(--text-secondary)";
+                            tagStyle = {
+                              ...tagStyle,
+                              background: "rgba(94, 93, 89, 0.08)",
+                              color: "var(--text-secondary)",
                             };
-                            headerStyle = { ...headerStyle, borderBottom: "1px solid #fed7d7" };
-                            titleColor = "#991b1b";
-                            tagStyle = { ...tagStyle, background: "#fee2e2", color: "#c53030" };
+                            tagText = "Nghỉ";
+                          } else if (totalDailyHours === 0) {
+                            // Weekday not logged
+                            if (themeMode === "dark") {
+                              cardStyle = {
+                                ...cardStyle,
+                                border: "1px solid rgba(220, 38, 38, 0.4)",
+                                background: "rgba(220, 38, 38, 0.08)",
+                              };
+                              headerStyle = { ...headerStyle, borderBottom: "1px solid rgba(220, 38, 38, 0.25)" };
+                              titleColor = "#fca5a5";
+                              tagStyle = { ...tagStyle, background: "rgba(220, 38, 38, 0.2)", color: "#fca5a5" };
+                            } else {
+                              cardStyle = {
+                                ...cardStyle,
+                                border: "1px solid #feb2b2",
+                                background: "#fff5f5",
+                              };
+                              headerStyle = { ...headerStyle, borderBottom: "1px solid #fed7d7" };
+                              titleColor = "#991b1b";
+                              tagStyle = { ...tagStyle, background: "#fee2e2", color: "#c53030" };
+                            }
+                            tagText = "Chưa log";
                           }
-                          tagText = "Chưa log";
-                        }
 
-                        const isDayEightHours = totalDailyHours >= 8.0;
-                        const progressPercent = isWeekend ? 0 : Math.min(100, (totalDailyHours / 8) * 100);
-                        const progressColor = isWeekend
-                          ? "var(--text-secondary)"
-                          : isDayEightHours
-                          ? "var(--success-color)"
-                          : "var(--warning-color)";
+                          const isDayEightHours = totalDailyHours >= 8.0;
+                          const progressPercent = isWeekend ? 0 : Math.min(100, (totalDailyHours / 8) * 100);
+                          const progressColor = isWeekend
+                            ? "var(--text-secondary)"
+                            : isDayEightHours
+                            ? "var(--success-color)"
+                            : "var(--warning-color)";
 
-                        return (
-                          <Col xs={24} sm={12} md={8} lg={8} xl={6} key={date}>
-                            <Card
-                              className="glass-panel"
-                              size="small"
-                              style={cardStyle}
-                              title={
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
-                                  <span style={{ fontWeight: 600, fontSize: "13px", color: titleColor }}>
-                                    {formatVietnameseDate(date)}
-                                  </span>
-                                  <Tag style={tagStyle}>
-                                    {tagText}
-                                  </Tag>
-                                </div>
-                              }
-                              headStyle={headerStyle}
-                              bodyStyle={{ padding: "12px 16px" }}
-                            >
-                              {/* Đã log: X / 8.0h */}
-                              <div style={{ marginBottom: "12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Đã log:</span>
-                                <span style={{ fontWeight: "bold", color: progressColor }}>
-                                  {isWeekend ? "–" : `${totalDailyHours.toFixed(1)} / 8.0h`}
-                                </span>
-                              </div>
-
-                              {/* Progress Bar */}
-                              <Progress
-                                percent={progressPercent}
-                                strokeColor={progressColor}
+                          return (
+                            <Col xs={24} sm={12} md={8} lg={8} xl={6} key={date}>
+                              <Card
+                                className="glass-panel"
                                 size="small"
-                                status={!isWeekend && isDayEightHours ? "success" : "normal"}
-                                style={{ marginBottom: "16px" }}
-                              />
+                                style={cardStyle}
+                                title={
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+                                    <span style={{ fontWeight: 600, fontSize: "13px", color: titleColor }}>
+                                      {formatVietnameseDate(date)}
+                                    </span>
+                                    <Tag style={tagStyle}>
+                                      {tagText}
+                                    </Tag>
+                                  </div>
+                                }
+                                headStyle={headerStyle}
+                                bodyStyle={{ padding: "12px 16px" }}
+                              >
+                                {/* Đã log: X / 8.0h */}
+                                <div style={{ marginBottom: "12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                  <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Đã log:</span>
+                                  <span style={{ fontWeight: "bold", color: progressColor }}>
+                                    {isWeekend ? "–" : `${totalDailyHours.toFixed(1)} / 8.0h`}
+                                  </span>
+                                </div>
 
-                              {/* Danh sách các log entry của ngày */}
-                              <div style={{ minHeight: "180px", maxHeight: "250px", overflowY: "auto", marginBottom: "16px" }}>
-                                {isWeekend ? (
-                                  <div style={{ textAlign: "center", padding: "30px 0", color: "var(--text-secondary)", fontSize: "13px" }}>
-                                    <ClockCircleOutlined style={{ marginRight: "6px" }} />
-                                    Cuối tuần - Không yêu cầu log time
-                                  </div>
-                                ) : entries.length === 0 ? (
-                                  <div style={{ textAlign: "center", padding: "30px 0" }}>
-                                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span style={{ fontSize: "12px" }}>Không có task</span>} />
-                                  </div>
-                                ) : (
-                                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                                    {entries.map((entry: any, index: number) => (
-                                      <div
-                                        key={entry.id || index}
-                                        style={{
-                                          padding: "8px",
-                                          background: themeMode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
-                                          border: "1px solid var(--glass-border)",
-                                          borderRadius: "8px",
-                                          display: "flex",
-                                          flexDirection: "column",
-                                          gap: "4px"
-                                        }}
-                                      >
-                                        <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-                                          <Tag style={{ background: "rgba(0,0,0,0.05)", border: "none", color: "var(--text-secondary)", fontSize: "11px", fontWeight: 500, margin: 0 }}>
-                                            {entry.project?.name || "Không có Project"}
-                                          </Tag>
-                                          {entry.issue?.id && (
-                                            <a
-                                              href={`${redmineServer}/issues/${entry.issue.id}`}
-                                              target="_blank"
-                                              rel="noopener noreferrer"
-                                              style={{ color: "var(--primary-color)", fontWeight: 600, fontSize: "12px" }}
-                                            >
-                                              #{entry.issue.id}
-                                            </a>
-                                          )}
-                                          {entry.activity?.name && (
-                                            <Tag style={{ background: "rgba(94,93,89,0.05)", border: "1px solid var(--glass-border)", color: "var(--text-secondary)", fontSize: "11px", margin: 0 }}>
-                                              {entry.activity.name}
+                                {/* Progress Bar */}
+                                <Progress
+                                  percent={progressPercent}
+                                  strokeColor={progressColor}
+                                  size="small"
+                                  status={!isWeekend && isDayEightHours ? "success" : "normal"}
+                                  style={{ marginBottom: "16px" }}
+                                />
+
+                                {/* Danh sách các log entry của ngày */}
+                                <div style={{ minHeight: "180px", maxHeight: "250px", overflowY: "auto", marginBottom: "16px" }}>
+                                  {isWeekend ? (
+                                    <div style={{ textAlign: "center", padding: "30px 0", color: "var(--text-secondary)", fontSize: "13px" }}>
+                                      <ClockCircleOutlined style={{ marginRight: "6px" }} />
+                                      Cuối tuần - Không yêu cầu log time
+                                    </div>
+                                  ) : entries.length === 0 ? (
+                                    <div style={{ textAlign: "center", padding: "30px 0" }}>
+                                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span style={{ fontSize: "12px" }}>Không có task</span>} />
+                                    </div>
+                                  ) : (
+                                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                      {entries.map((entry: any, index: number) => (
+                                        <div
+                                          key={entry.id || index}
+                                          style={{
+                                            padding: "8px",
+                                            background: themeMode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
+                                            border: "1px solid var(--glass-border)",
+                                            borderRadius: "8px",
+                                            display: "flex",
+                                            flexDirection: "column",
+                                            gap: "4px"
+                                          }}
+                                        >
+                                          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                                            <Tag style={{ background: "rgba(0,0,0,0.05)", border: "none", color: "var(--text-secondary)", fontSize: "11px", fontWeight: 500, margin: 0 }}>
+                                              {entry.project?.name || "Không có Project"}
                                             </Tag>
-                                          )}
-                                        </div>
-                                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
-                                          <div style={{ color: "var(--text-primary)", fontSize: "12px", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                            {entry.comments || <span style={{ color: "var(--text-secondary)", fontStyle: "italic" }}>(Không có ghi chú)</span>}
+                                            {entry.issue?.id && (
+                                              <a
+                                                href={`${redmineServer}/issues/${entry.issue.id}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                style={{ color: "var(--primary-color)", fontWeight: 600, fontSize: "12px" }}
+                                              >
+                                                #{entry.issue.id}
+                                              </a>
+                                            )}
+                                            {entry.activity?.name && (
+                                              <Tag style={{ background: "rgba(94,93,89,0.05)", border: "1px solid var(--glass-border)", color: "var(--text-secondary)", fontSize: "11px", margin: 0 }}>
+                                                {entry.activity.name}
+                                              </Tag>
+                                            )}
                                           </div>
-                                          <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)", whiteSpace: "nowrap" }}>
-                                            {entry.hours}h
-                                          </span>
+                                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
+                                            <div style={{ color: "var(--text-primary)", fontSize: "12px", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                              {entry.comments || <span style={{ color: "var(--text-secondary)", fontStyle: "italic" }}>(Không có ghi chú)</span>}
+                                            </div>
+                                            <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)", whiteSpace: "nowrap" }}>
+                                              {entry.hours}h
+                                            </span>
+                                          </div>
                                         </div>
-                                      </div>
-                                    ))}
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Quick Add input (chỉ cho ngày thường) */}
+                                {!isWeekend && (
+                                  <div style={{ display: "flex", gap: "4px" }}>
+                                    <Input
+                                      placeholder="Thêm nhanh công việc..."
+                                      value={quickTaskNames[date] || ""}
+                                      onChange={(e) => setQuickTaskNames({ ...quickTaskNames, [date]: e.target.value })}
+                                      onPressEnter={() => handleAddQuickWeekTask(date)}
+                                      size="small"
+                                    />
+                                    <Button
+                                      type="primary"
+                                      icon={<PlusOutlined />}
+                                      onClick={() => handleAddQuickWeekTask(date)}
+                                      size="small"
+                                    />
                                   </div>
                                 )}
-                              </div>
+                              </Card>
+                            </Col>
+                          );
+                        })}
 
-                              {/* Quick Add input (chỉ cho ngày thường) */}
-                              {!isWeekend && (
-                                <div style={{ display: "flex", gap: "4px" }}>
-                                  <Input
-                                    placeholder="Thêm nhanh công việc..."
-                                    value={quickTaskNames[date] || ""}
-                                    onChange={(e) => setQuickTaskNames({ ...quickTaskNames, [date]: e.target.value })}
-                                    onPressEnter={() => handleAddQuickWeekTask(date)}
-                                    size="small"
-                                  />
-                                  <Button
-                                    type="primary"
-                                    icon={<PlusOutlined />}
-                                    onClick={() => handleAddQuickWeekTask(date)}
-                                    size="small"
-                                  />
-                                </div>
-                              )}
-                            </Card>
-                          </Col>
-                        );
-                      })}
-
-                      {/* Pagination component — phải nằm trong Row nhưng là full-width Col */}
-                      <Col span={24}>
-                        <div style={{ display: "flex", justifyContent: "center", marginTop: "8px", paddingBottom: "20px" }}>
-                          <Pagination
-                            current={spentTimePage}
-                            pageSize={spentTimePageSize}
-                            total={sortedDates.length}
-                            onChange={(page, pageSize) => {
-                              setSpentTimePage(page);
-                              if (pageSize) {
-                                setSpentTimePageSize(pageSize);
-                              }
-                            }}
-                            showSizeChanger
-                            pageSizeOptions={["12", "24", "48"]}
-                            style={{ color: "var(--text-primary)" }}
-                          />
-                        </div>
-                      </Col>
-                    </Row>
-                  );
-                })()}
+                        {/* Pagination component — phải nằm trong Row nhưng là full-width Col */}
+                        <Col span={24}>
+                          <div style={{ display: "flex", justifyContent: "center", marginTop: "8px", paddingBottom: "20px" }}>
+                            <Pagination
+                              current={spentTimePage}
+                              pageSize={spentTimePageSize}
+                              total={sortedDates.length}
+                              onChange={(page, pageSize) => {
+                                setSpentTimePage(page);
+                                if (pageSize) {
+                                  setSpentTimePageSize(pageSize);
+                                }
+                              }}
+                              showSizeChanger
+                              pageSizeOptions={["12", "24", "48"]}
+                              style={{ color: "var(--text-primary)" }}
+                            />
+                          </div>
+                        </Col>
+                      </Row>
+                    );
+                  })()}
+                </Card>
               </div>
             )}
 
