@@ -1,6 +1,7 @@
 // Tự theo dõi hoạt động trên máy (giống ActivityWatch): lấy mẫu thời gian rảnh, khoá màn hình và cửa sổ đang dùng
 // mỗi 15 giây, gộp thành các sự kiện liên tục và lưu theo ngày vào <dataDir>/activity/YYYY-MM-DD.json.
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import { execFile } from 'child_process'
 import { redact } from './agentHistory'
@@ -176,18 +177,38 @@ async function takeSample(): Promise<{ sample: Sample; caps: ActivityCapabilitie
 
 // ---- Tracker ----
 
+/** Thư mục dữ liệu hoạt động dùng chung cho app, dev server và daemon chạy ngầm */
+export function activityDataDir(): string {
+  return process.env.ACTIVITY_DATA_DIR || path.join(os.homedir(), '.logtime-ai')
+}
+
+const pidAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e: any) {
+    return e.code === 'EPERM'
+  }
+}
+
 export class ActivityTracker {
   private dir: string
+  private lockFile: string
   private events: ActivityEvent[] = []
   private day = ''
   private dirty = false
   private timers: NodeJS.Timeout[] = []
   private lastSampleAt = 0
+  /** Chỉ một tiến trình được ghi dữ liệu tại một thời điểm (daemon ưu tiên hơn app) */
+  private writer = false
+  private force: boolean
   capabilities: ActivityCapabilities = { idle: false, window: false }
   enabled = true
 
-  constructor(dataDir: string) {
+  constructor(dataDir: string, options: { force?: boolean } = {}) {
     this.dir = path.join(dataDir, 'activity')
+    this.lockFile = path.join(this.dir, 'tracker.pid')
+    this.force = !!options.force
     fs.mkdirSync(this.dir, { recursive: true })
     try {
       this.enabled = JSON.parse(fs.readFileSync(path.join(this.dir, 'config.json'), 'utf8')).enabled !== false
@@ -196,12 +217,60 @@ export class ActivityTracker {
     }
   }
 
+  private lockOwner(): number {
+    try {
+      return Number(fs.readFileSync(this.lockFile, 'utf8')) || 0
+    } catch {
+      return 0
+    }
+  }
+
+  /** Nhận quyền ghi nếu không có tiến trình khác đang giữ (daemon dùng force để giành lại quyền) */
+  private claimWriter(force = this.force) {
+    const owner = this.lockOwner()
+    if (!force && owner && owner !== process.pid && pidAlive(owner)) {
+      this.writer = false
+      return
+    }
+    fs.writeFileSync(this.lockFile, String(process.pid), 'utf8')
+    this.writer = true
+    // Lấy lại đúng dữ liệu đã ghi của ngày hiện tại để không mất khi chuyển quyền
+    this.day = ''
+  }
+
+  private releaseWriter() {
+    if (this.writer && this.lockOwner() === process.pid) {
+      try {
+        fs.unlinkSync(this.lockFile)
+      } catch {
+        /* đã bị xoá */
+      }
+    }
+    this.writer = false
+  }
+
+  get isWriter() {
+    return this.writer
+  }
+
   start() {
+    this.claimWriter()
     void this.tick()
     this.timers.push(setInterval(() => void this.tick(), SAMPLE_INTERVAL_MS))
     this.timers.push(setInterval(() => this.flush(), FLUSH_INTERVAL_MS))
     for (const t of this.timers) t.unref?.()
-    process.once('exit', () => this.flush())
+    process.once('exit', () => {
+      this.flush()
+      this.releaseWriter()
+    })
+  }
+
+  /** Dừng lấy mẫu, ghi nốt dữ liệu và trả quyền ghi (dùng khi daemon thoát) */
+  stop() {
+    for (const t of this.timers) clearInterval(t)
+    this.timers = []
+    this.flush()
+    this.releaseWriter()
   }
 
   setEnabled(enabled: boolean) {
@@ -224,7 +293,7 @@ export class ActivityTracker {
   }
 
   private flush() {
-    if (!this.dirty || !this.day) return
+    if (!this.writer || !this.dirty || !this.day) return
     fs.writeFileSync(this.fileFor(this.day), JSON.stringify(this.events), 'utf8')
     this.dirty = false
   }
@@ -233,6 +302,18 @@ export class ActivityTracker {
     const now = Date.now()
     const { sample, caps } = await takeSample().catch(() => ({ sample: {} as Sample, caps: this.capabilities }))
     this.capabilities = caps
+    if (!this.writer) {
+      // Tiến trình khác đang ghi: chỉ thử nhận quyền khi chủ cũ đã thoát
+      this.claimWriter(false)
+      if (!this.writer) return
+    } else if (this.lockOwner() !== process.pid) {
+      // Daemon vừa giành quyền ghi: dừng ghi, bỏ dữ liệu trong bộ nhớ (đã có trong file của daemon)
+      this.writer = false
+      this.events = []
+      this.dirty = false
+      this.day = ''
+      return
+    }
     if (!this.enabled) return
 
     const date = toVnDate(now)
@@ -266,8 +347,9 @@ export class ActivityTracker {
   }
 
   summary(date: string) {
-    if (date === this.day) this.flush()
-    const events = date === this.day ? this.events : this.loadDay(date)
+    const live = this.writer && date === this.day
+    if (live) this.flush()
+    const events = live ? this.events : this.loadDay(date)
     const minutes = (e: ActivityEvent) => (e.end - e.start) / 60000
 
     const active = events.filter((e) => !e.afk)
@@ -330,5 +412,21 @@ export function getActivityTracker(dataDir: string): ActivityTracker {
     tracker.start()
     trackers.set(dataDir, tracker)
   }
+  return tracker
+}
+
+/** Daemon chạy ngầm: luôn giành quyền ghi và giữ tiến trình sống cho tới khi nhận tín hiệu dừng */
+export function runActivityDaemon(dataDir: string) {
+  const tracker = new ActivityTracker(dataDir, { force: true })
+  tracker.start()
+  // Timer của tracker được unref để app thoát bình thường; daemon cần một timer giữ tiến trình sống
+  const keepAlive = setInterval(() => undefined, 1 << 30)
+  const shutdown = () => {
+    clearInterval(keepAlive)
+    tracker.stop()
+    process.exit(0)
+  }
+  process.once('SIGTERM', shutdown)
+  process.once('SIGINT', shutdown)
   return tracker
 }

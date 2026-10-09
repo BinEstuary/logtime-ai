@@ -17,6 +17,8 @@ import {
   EditOutlined,
 } from "@ant-design/icons";
 import type { Task } from "./aiService";
+import { matchTaskByName } from "./taskMatch";
+import { applyTaskPrefix } from "./taskPrefix";
 import { analyzeRedmineMapping, extractSearchQuery, type RedmineMatchSuggestion } from "./aiRedmineService";
 import type { AiConfig } from "./aiClient";
 
@@ -41,8 +43,14 @@ interface Row {
   ai?: RedmineMatchSuggestion;
   aiLoading?: boolean;
   newSubject: string;
+  /** Tên task con được tự động khớp với tên công việc */
+  autoMatched?: boolean;
   excluded: boolean;
+  /** Tên Activity khi log time (Redmine bắt buộc có) */
+  activity: string;
 }
+
+const DEFAULT_ACTIVITY = "Development";
 
 interface Props {
   entries: LogEntryInput[];
@@ -51,6 +59,8 @@ interface Props {
   redmineServer?: string;
   /** Project mặc định — chỉ dùng để thu hẹp phạm vi AI tìm task, không dùng làm đích log */
   defaultProject?: string;
+  /** Tiền tố thêm vào đầu tên task con khi tạo trên Redmine */
+  taskPrefix?: string;
   onCancel: () => void;
   onDone: () => void;
   /** Gọi ngay khi một entry log thành công, để task không bị log lại */
@@ -84,6 +94,7 @@ const buildInitialRows = (entries: LogEntryInput[]): Row[] =>
       error,
       newSubject: task.name,
       excluded: false,
+      activity: DEFAULT_ACTIVITY,
     };
   });
 
@@ -93,6 +104,7 @@ export default function LogTimeConfirmModal({
   aiConfig,
   redmineServer,
   defaultProject,
+  taskPrefix = "",
   onCancel,
   onDone,
   onTaskLogged,
@@ -100,6 +112,21 @@ export default function LogTimeConfirmModal({
 }: Props) {
   const [initialRows] = useState(() => buildInitialRows(entries));
   const [rows, setRows] = useState<Row[]>(initialRows);
+  // Danh sách Activity của project chứa từng issue, tải một lần cho mỗi issue
+  const [activityOptions, setActivityOptions] = useState<Record<number, string[]>>({});
+  const requestedActivities = useRef(new Set<number>());
+  useEffect(() => {
+    rows.forEach((r) => {
+      const id = r.issueId;
+      if (!id || r.status === "logged" || requestedActivities.current.has(id)) return;
+      requestedActivities.current.add(id);
+      postJson("/api/redmine/time-activities", { issue: id })
+        .then((data) => {
+          if (Array.isArray(data)) setActivityOptions((prev) => ({ ...prev, [id]: data.map((a: any) => a.name) }));
+        })
+        .catch(() => undefined);
+    });
+  }, [rows]);
   const [parentIssues, setParentIssues] = useState<Record<number, any>>({});
   const [projects, setProjects] = useState<Record<number, any>>({});
   const [isLogging, setIsLogging] = useState(false);
@@ -180,7 +207,10 @@ export default function LogTimeConfirmModal({
 
     (async () => {
       for (const row of initialRows) {
-        if (row.status === "loading" && row.issueId) await resolveRow(row.key, row.issueId);
+        if (row.status === "loading" && row.issueId) {
+          const issue = await resolveRow(row.key, row.issueId);
+          if (issue) await tryAutoMatchChild(row, issue);
+        }
       }
       for (const row of initialRows) {
         if (row.status === "no_issue") await runAiSuggestion(row);
@@ -198,10 +228,23 @@ export default function LogTimeConfirmModal({
 
   const applyIssue = async (row: Row, issueId: number) => {
     const issue = await resolveRow(row.key, issueId);
-    // Chỉ ghi vào task khi issue là task lá; chọn issue cha thì chờ chọn task con
-    if (issue && !(Array.isArray(issue.children) && issue.children.length > 0)) {
-      onTaskIssueChange(row.date, row.task.id, issue.id, issue.project?.name);
+    if (!issue) return;
+    // Chỉ ghi vào task khi issue là task lá; chọn issue cha thì tìm task con khớp
+    if (Array.isArray(issue.children) && issue.children.length > 0) {
+      await tryAutoMatchChild(row, issue);
+      return;
     }
+    onTaskIssueChange(row.date, row.task.id, issue.id, issue.project?.name);
+  };
+
+  // Issue cha: nếu có task con khớp rõ với tên công việc thì tự chọn task con đó
+  const tryAutoMatchChild = async (row: Row, issue: any) => {
+    if (!(Array.isArray(issue.children) && issue.children.length > 0)) return;
+    const children = await postJson("/api/redmine/search", { parent: issue.id, status: "open", limit: 100 });
+    const match = matchTaskByName(row.task.name, Array.isArray(children) ? children : []);
+    if (!match) return;
+    await applyIssue(row, match.id);
+    patchRow(row.key, { autoMatched: true });
   };
 
   const createChildTask = async (row: Row, parent: { id: number; projectId?: number }, subject: string) => {
@@ -217,7 +260,7 @@ export default function LogTimeConfirmModal({
       const created = await postJson("/api/redmine/create-issue", {
         project: projectId,
         parent: parent.id,
-        subject: subject.trim(),
+        subject: applyTaskPrefix(taskPrefix, subject),
         estimatedHours: row.task.duration || undefined,
       });
       if (!created?.id) throw new Error(created?.error || "Không tạo được task con");
@@ -313,8 +356,19 @@ export default function LogTimeConfirmModal({
           {statusIcon(r)}
           <Tag color="blue">{dayjs(r.date).locale("vi").format("dd DD/MM")}</Tag>
           <Tag color="purple">{fmtHours(r.task.duration)}h</Tag>
+          {r.status !== "logged" && (
+            <Select
+              size="small"
+              style={{ width: 150 }}
+              value={r.activity}
+              disabled={disabled}
+              onChange={(v) => patchRow(r.key, { activity: v })}
+              options={Array.from(new Set([r.activity, ...(r.issueId ? activityOptions[r.issueId] || [] : [])])).map((name) => ({ value: name, label: name }))}
+            />
+          )}
           <Text strong style={{ fontSize: 13 }}>{r.task.name}</Text>
           {r.status === "logged" && <Tag color="success">Đã log</Tag>}
+          {r.autoMatched && r.status === "ok" && <Tag color="geekblue">Tự khớp task con</Tag>}
           {r.error && r.status !== "logged" && r.status !== "invalid" && <Tag color="error">Lỗi: {r.error}</Tag>}
           {r.status === "invalid" && <Tag color="error">{r.error}</Tag>}
           {!r.excluded && isDuplicate(r) && r.status !== "logged" && (
@@ -350,6 +404,11 @@ export default function LogTimeConfirmModal({
             <Text type="warning" style={{ fontSize: 12 }}>
               #{r.issue.id} có {r.issue.children?.length} task con — chọn task con hoặc tạo task con mới:
             </Text>
+            {!r.autoMatched && (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                <RobotOutlined /> Chưa có task con khớp với "{r.task.name}". Gợi ý: tạo task con mới bằng tên này.
+              </Text>
+            )}
             <Space size={6} wrap>
               {issueSelect(r, r.children, r.children.length ? "Chọn task con đang mở..." : "Không có task con đang mở")}
               <Input
@@ -396,7 +455,7 @@ export default function LogTimeConfirmModal({
                     icon={<PlusOutlined />}
                     onClick={() => createChildTask(r, { id: r.ai!.parentIssueId! }, r.newSubject)}
                   >
-                    Tạo task con "{r.newSubject}" dưới #{r.ai.parentIssueId} {r.ai.parentIssueSubject}
+                    Tạo task con "{applyTaskPrefix(taskPrefix, r.newSubject)}" dưới #{r.ai.parentIssueId} {r.ai.parentIssueSubject}
                   </Button>
                 )}
                 <Text type="secondary" style={{ fontSize: 12 }}>{r.ai.reason}</Text>
@@ -521,6 +580,7 @@ export default function LogTimeConfirmModal({
           comment: r.task.name,
           date: r.date,
           issue: r.issueId,
+          activity: r.activity,
         });
         if (data.success) {
           ok++;

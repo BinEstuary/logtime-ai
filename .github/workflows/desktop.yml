@@ -62,15 +62,22 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "LogTime AI $GITHUB_REF_NAME" \
-            --generate-notes \
-            dist/*.exe dist/*.dmg dist/*.AppImage dist/*.deb
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber \
+              dist/*.exe dist/*.dmg dist/*.AppImage dist/*.deb
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "LogTime AI $GITHUB_REF_NAME" \
+              --generate-notes \
+              dist/*.exe dist/*.dmg dist/*.AppImage dist/*.deb
+          fi
 
   # Release tạo bằng GITHUB_TOKEN không kích hoạt workflow khác, nên gọi trực tiếp để cập nhật trang download
   pages:

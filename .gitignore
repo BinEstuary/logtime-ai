@@ -42,3 +42,6 @@ download-page/release.js
 
 # Dữ liệu theo dõi hoạt động trên máy (riêng tư)
 activity/
+
+# Bản build daemon ghi nhớ hoạt động
+dist-daemon/

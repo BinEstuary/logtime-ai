@@ -6,8 +6,8 @@ import path from 'path'
 import os from 'os'
 import { execFile } from 'child_process'
 import type { IncomingMessage, ServerResponse } from 'http'
-import { readAgentHistory, type AgentSource } from './agentHistory'
-import { getActivityTracker } from './activityTracker'
+import { readAgentHistory, ALL_AGENT_SOURCES, type AgentSource } from './agentHistory'
+import { activityDataDir, getActivityTracker } from './activityTracker'
 import { installGnomeExtension } from './gnomeExtension'
 
 export interface ApiOptions {
@@ -149,7 +149,7 @@ const updateMcpConfig = (file: string, redmineBin: string, server: string, apiKe
 
 export function createApiMiddleware(options: ApiOptions) {
   const { redmineBin, dataDir } = options
-  const tracker = options.enableLocalActivity ? getActivityTracker(dataDir) : undefined
+  const tracker = options.enableLocalActivity ? getActivityTracker(activityDataDir()) : undefined
   const configPath = path.join(os.homedir(), '.redmine-cli.yaml')
 
   return async (req: IncomingMessage, res: ServerResponse, next: Next) => {
@@ -196,9 +196,26 @@ profiles:
           return sendJson(res, 200, { success: true })
         }
 
+        // Danh sách Activity của project chứa issue (Redmine bắt buộc có activity khi log time)
+        case 'POST /api/redmine/time-activities': {
+          const { issue } = await readBody(req)
+          const issueId = parsePositiveId(issue)
+          if (!issueId) return sendJson(res, 400, { success: false, error: 'Mã issue không hợp lệ' })
+          try {
+            const { stdout: issueJson } = await runRedmine(redmineBin, ['issues', 'get', String(issueId), '-o', 'json'])
+            const projectId = parsePositiveId(JSON.parse(issueJson || '{}').project?.id)
+            if (!projectId) return sendJson(res, 404, { success: false, error: `Không tìm thấy project của issue #${issueId}` })
+            const { stdout } = await runRedmine(redmineBin, ['api', `/projects/${projectId}.json?include=time_entry_activities`, '-o', 'json'])
+            const list = JSON.parse(stdout || '{}').project?.time_entry_activities
+            return sendJson(res, 200, Array.isArray(list) ? list.map((a: any) => ({ id: a.id, name: a.name })) : [])
+          } catch (e) {
+            return sendRedmineError(res, e)
+          }
+        }
+
         // 4. Log time một task lên Redmine
         case 'POST /api/redmine/log': {
-          const { hours, comment, date, issue } = await readBody(req)
+          const { hours, comment, date, issue, activity } = await readBody(req)
           if (!isValidDate(date)) return sendJson(res, 400, { success: false, error: INVALID_DATE })
           const [y, m, d] = date.split('-').map(Number)
           const dayOfWeek = new Date(Date.UTC(y, m - 1, d)).getUTCDay()
@@ -216,7 +233,10 @@ profiles:
           }
           const issueId = parsePositiveId(issue)
           if (!issueId) return sendJson(res, 400, { success: false, error: 'Mã issue không hợp lệ' })
-          const args = ['time', 'log', '--hours', String(hoursNum), '--date', date, '--comment', String(comment ?? ''), '--issue', String(issueId), '-o', 'json']
+          // Activity: tên hoặc ID; mặc định "Development" như Redmine đang dùng
+          const activityRef = typeof activity === 'number' ? String(activity) : typeof activity === 'string' ? activity.trim() : 'Development'
+          if (!activityRef || activityRef.length > 100) return sendJson(res, 400, { success: false, error: 'Activity không hợp lệ' })
+          const args = ['time', 'log', '--hours', String(hoursNum), '--date', date, '--comment', String(comment ?? ''), '--issue', String(issueId), '--activity', activityRef, '-o', 'json']
           try {
             const { stdout: issueJson } = await runRedmine(redmineBin, ['issues', 'get', String(issueId), '--children', '-o', 'json'])
             const target = JSON.parse(issueJson || '{}')
@@ -285,7 +305,7 @@ profiles:
 
         // 6. Tạo issue (subtask) trên Redmine
         case 'POST /api/redmine/create-issue': {
-          const { project, parent, subject, description, estimatedHours } = await readBody(req)
+          const { project, parent, subject, description, estimatedHours, allowRoot } = await readBody(req)
           if (typeof subject !== 'string' || !subject.trim()) {
             return sendJson(res, 400, { success: false, error: 'Subject is required' })
           }
@@ -295,6 +315,9 @@ profiles:
             parentId = parsePositiveId(parent)
             if (!parentId) return sendJson(res, 400, { success: false, error: 'Mã issue cha không hợp lệ' })
             args.push('--parent', String(parentId))
+          } else if (allowRoot !== true) {
+            // Task do AI gợi ý phải là task con; chỉ task cha tạo thủ công mới được phép ở cấp gốc
+            return sendJson(res, 400, { success: false, error: 'Task phải được tạo làm task con của một issue cha' })
           }
           let projectRef = project ? String(project) : ''
           // Task con mặc định nằm cùng project với issue cha
@@ -370,9 +393,9 @@ profiles:
         case 'GET /api/agent-history': {
           if (!options.enableLocalActivity) return sendJson(res, 404, { success: false, error: 'Agent history API is disabled' })
           const date = url.searchParams.get('date') || ''
-          const sources = (url.searchParams.get('sources') || 'claude,antigravity')
+          const sources = (url.searchParams.get('sources') || ALL_AGENT_SOURCES.join(','))
             .split(',')
-            .filter((s): s is AgentSource => s === 'claude' || s === 'antigravity')
+            .filter((s): s is AgentSource => (ALL_AGENT_SOURCES as string[]).includes(s))
           if (!isValidDate(date)) return sendJson(res, 400, { success: false, error: INVALID_DATE })
           const result = await readAgentHistory(date, sources)
           return sendJson(res, 200, { success: true, ...result })

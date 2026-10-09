@@ -12,7 +12,10 @@ const MAX_NOTE_CHARS = 500
 const MAX_ACTIVE_GAP_MIN = 30
 const TAIL_AFTER_LAST_PROMPT_MIN = 10
 
-export type AgentSource = 'claude' | 'antigravity'
+import { AGENT_READERS, AGENT_READER_IDS, type AgentReaderId, type AgentSourceResult } from './agents'
+
+export type AgentSource = 'claude' | 'antigravity' | AgentReaderId
+export const ALL_AGENT_SOURCES: AgentSource[] = ['claude', 'antigravity', ...AGENT_READER_IDS]
 
 export interface ClaudeProjectActivity {
   project: string
@@ -37,6 +40,8 @@ export interface AgentHistoryResult {
   date: string
   claude?: { available: boolean; error?: string; projects: ClaudeProjectActivity[] }
   antigravity?: { available: boolean; error?: string; conversations: AntigravityConversation[] }
+  /** Các nguồn khác (Codex, Gemini CLI, Kiro, Goose, opencode, Zed, Copilot CLI, Cline...) */
+  agents?: AgentSourceResult[]
 }
 
 const historyHome = () => process.env.AGENT_HISTORY_HOME || os.homedir()
@@ -197,6 +202,10 @@ async function readAntigravityHistory(date: string): Promise<AgentHistoryResult[
   }
 }
 
+// Đọc lịch sử các agent khá nặng (parse nhiều file, copy DB), nên giữ kết quả ngắn hạn để mở lại modal nhanh
+const AGENT_CACHE_TTL_MS = 2 * 60 * 1000
+const agentCache = new Map<string, { at: number; value: AgentSourceResult }>()
+
 export async function readAgentHistory(date: string, sources: AgentSource[]): Promise<AgentHistoryResult> {
   const result: AgentHistoryResult = { date }
   if (sources.includes('claude')) {
@@ -208,6 +217,24 @@ export async function readAgentHistory(date: string, sources: AgentSource[]): Pr
   }
   if (sources.includes('antigravity')) {
     result.antigravity = await readAntigravityHistory(date)
+  }
+  const readers = AGENT_READER_IDS.filter((id) => sources.includes(id))
+  if (readers.length > 0) {
+    // Các nguồn đọc song song; một nguồn lỗi không làm hỏng các nguồn khác
+    result.agents = await Promise.all(
+      readers.map(async (id) => {
+        const key = `${id}|${date}|${historyHome()}`
+        const cached = agentCache.get(key)
+        if (cached && Date.now() - cached.at < AGENT_CACHE_TTL_MS) return cached.value
+        try {
+          const value = await AGENT_READERS[id](date, historyHome())
+          agentCache.set(key, { at: Date.now(), value })
+          return value
+        } catch (e: any) {
+          return { id, label: id, available: false, error: e.message, projects: [] }
+        }
+      })
+    )
   }
   return result
 }

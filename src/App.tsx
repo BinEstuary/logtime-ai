@@ -71,6 +71,7 @@ import confetti from "canvas-confetti";
 import type { Task, ChatMessage } from "./aiService";
 import { loadAiSettings, resolveAiConfig, saveAiSettings, PROVIDERS, type AiSettings } from "./aiClient";
 import AiSettingsPanel from "./AiSettings";
+import { loadTaskPrefix, saveTaskPrefix } from "./taskPrefix";
 import LogTimeConfirmModal, { type LogEntryInput } from "./LogTimeConfirmModal";
 import ActivitySummaryModal from "./ActivitySummaryModal";
 import DaySummaryTree from "./DaySummaryTree";
@@ -355,6 +356,7 @@ export default function App() {
   const [redmineApiKey, setRedmineApiKey] = useState("");
   const [redmineKeyHint, setRedmineKeyHint] = useState("");
   const [redmineDefaultProject, setRedmineDefaultProject] = useState("");
+  const [taskPrefix, setTaskPrefix] = useState("");
   const [redmineLoaded, setRedmineLoaded] = useState(false);
   // Cài đặt đã lưu (khác bản đang sửa trong trang Cài đặt) — dùng để biết còn thiếu bước thiết lập nào
   const [savedAiSettings, setSavedAiSettings] = useState<AiSettings>(loadAiSettings);
@@ -532,6 +534,7 @@ export default function App() {
     if (savedDefaultProject) {
       setRedmineDefaultProject(savedDefaultProject);
     }
+    setTaskPrefix(loadTaskPrefix());
   }, []);
 
   // Tải danh sách ticket của me cho dashboard
@@ -1068,7 +1071,8 @@ export default function App() {
     saveAiSettings(aiSettings);
     setSavedAiSettings(aiSettings);
     localStorage.setItem("logtime_redmine_default_project", redmineDefaultProject);
-    
+    saveTaskPrefix(taskPrefix.trim());
+
     try {
       const res = await fetch("/api/save-redmine", {
         method: "POST",
@@ -1096,13 +1100,15 @@ export default function App() {
     JSON.stringify(aiSettings) !== JSON.stringify(savedAiSettings) ||
     redmineServer !== savedRedmine.server ||
     redmineApiKey !== savedRedmine.apiKey ||
-    redmineDefaultProject !== (localStorage.getItem("logtime_redmine_default_project") || "");
+    redmineDefaultProject !== (localStorage.getItem("logtime_redmine_default_project") || "") ||
+    taskPrefix.trim() !== loadTaskPrefix();
 
   const revertSettings = () => {
     setAiSettings(savedAiSettings);
     setRedmineServer(savedRedmine.server);
     setRedmineApiKey(savedRedmine.apiKey);
     setRedmineDefaultProject(localStorage.getItem("logtime_redmine_default_project") || "");
+    setTaskPrefix(loadTaskPrefix());
   };
 
   // Rời trang Cài đặt khi còn thay đổi chưa lưu thì hỏi để tránh mất dữ liệu
@@ -3039,6 +3045,18 @@ export default function App() {
                           Giúp AI tìm đúng issue khi công việc chưa gắn issue.
                         </Text>
                       </div>
+
+                      <div>
+                        <div className="field-label">Tiền tố tên task</div>
+                        <Input
+                          placeholder="Ví dụ: BE -"
+                          value={taskPrefix}
+                          onChange={(e) => setTaskPrefix(e.target.value)}
+                        />
+                        <Text type="secondary" style={{ fontSize: "12px", display: "block", marginTop: "4px" }}>
+                          Tự thêm vào đầu tên task con khi tạo trên Redmine, ví dụ "BE - Cập nhật API". Có dấu cách giữa tiền tố và tên; để trống thì không thêm.
+                        </Text>
+                      </div>
                     </div>
 
                     <div className="settings-section">
@@ -4305,6 +4323,7 @@ export default function App() {
           aiConfig={aiConfig}
           redmineServer={redmineServer}
           defaultProject={redmineDefaultProject}
+          taskPrefix={taskPrefix}
           onCancel={() => setLogConfirmEntries(null)}
           onDone={handleLogConfirmDone}
           onTaskIssueChange={handleTaskIssueChange}
@@ -4319,6 +4338,7 @@ export default function App() {
           plannedTasks={getTasksForDate(activitySummaryDate)}
           onAddTasks={handleAddTasksToDate}
           onSummaryChange={handleDaySummaryChange}
+          taskPrefix={taskPrefix}
           onClose={() => setActivitySummaryDate(null)}
         />
       )}

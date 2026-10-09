@@ -19,12 +19,15 @@ import {
   Typography,
   Collapse,
   Empty,
+  Popover,
   Tooltip,
   message as antdMessage,
 } from "antd";
 import { DesktopOutlined, RobotOutlined, AppstoreOutlined, PlusOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import type { AiConfig } from "./aiClient";
 import { summarizeDayActivityWithAI, type Task, type DayActivitySummary } from "./aiService";
+import { matchTaskByName } from "./taskMatch";
+import { applyTaskPrefix } from "./taskPrefix";
 import { loadDaySummary, saveDaySummary, summaryRowToTask, type StoredDaySummary, type SummaryRow } from "./activitySummaryStore";
 
 const { Text, Paragraph } = Typography;
@@ -37,6 +40,8 @@ interface Props {
   onAddTasks: (date: string, tasks: Task[]) => void;
   /** Kết quả tóm tắt được lưu lại để hiển thị trên thẻ ngày */
   onSummaryChange: (date: string, summary: StoredDaySummary | null) => void;
+  /** Tiền tố thêm vào đầu tên task con khi tạo nhanh trên Redmine */
+  taskPrefix?: string;
   onClose: () => void;
 }
 
@@ -95,7 +100,89 @@ function ActivityTimeline({ timeline }: { timeline: any[] }) {
   );
 }
 
-export default function ActivitySummaryModal({ date, aiConfig, existingEntries, plannedTasks, onAddTasks, onSummaryChange, onClose }: Props) {
+// Nút "Tạo task": nhập tên task cha (tuỳ chọn là con của một task khác), tạo xong thì task AI của dòng thành con của nó
+function NewParentTaskPopover({
+  issues,
+  loading,
+  onCreate,
+  onAttach,
+}: {
+  issues: any[];
+  loading: boolean;
+  onCreate: (title: string, parentId?: number) => Promise<boolean>;
+  onAttach: (parentId: number) => Promise<boolean>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState("");
+  const [parentId, setParentId] = useState<number>();
+  const [saving, setSaving] = useState(false);
+  const options = issues.map((i) => ({ value: i.id, label: `#${i.id} ${i.subject}` }));
+
+  const submit = async () => {
+    setSaving(true);
+    const ok = await onCreate(title.trim(), parentId);
+    setSaving(false);
+    if (ok) {
+      setOpen(false);
+      setTitle("");
+      setParentId(undefined);
+    }
+  };
+
+  const attach = async (id: number) => {
+    if (await onAttach(id)) setOpen(false);
+  };
+
+  const content = (
+    <Space orientation="vertical" size={8} style={{ width: 300 }}>
+      <Text strong style={{ fontSize: 12 }}>Tạo task cha mới</Text>
+      <Input
+        size="small"
+        autoFocus
+        placeholder="Tên task cha"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onPressEnter={() => title.trim() && submit()}
+      />
+      <Select
+        size="small"
+        allowClear
+        showSearch
+        optionFilterProp="label"
+        placeholder="Là con của task (không bắt buộc)"
+        style={{ width: "100%" }}
+        value={parentId}
+        onChange={(v) => setParentId(v ?? undefined)}
+        options={options}
+      />
+      <Button size="small" type="primary" disabled={!title.trim()} loading={saving} onClick={submit}>
+        Tạo task
+      </Button>
+      <Text strong style={{ fontSize: 12 }}>Hoặc đặt dưới task có sẵn</Text>
+      <Select
+        size="small"
+        showSearch
+        optionFilterProp="label"
+        placeholder="Chọn task cha có sẵn"
+        style={{ width: "100%" }}
+        value={null}
+        disabled={!options.length}
+        onChange={attach}
+        options={options}
+      />
+    </Space>
+  );
+
+  return (
+    <Popover open={open} onOpenChange={setOpen} trigger="click" placement="bottomLeft" title="Tạo task" content={content}>
+      <Button size="small" icon={<PlusOutlined />} loading={loading}>
+        Tạo task
+      </Button>
+    </Popover>
+  );
+}
+
+export default function ActivitySummaryModal({ date, aiConfig, existingEntries, plannedTasks, onAddTasks, onSummaryChange, taskPrefix = "", onClose }: Props) {
   const [stored] = useState(() => loadDaySummary(date));
   const [activity, setActivity] = useState<any>(null);
   const [agentHistory, setAgentHistory] = useState<any>(null);
@@ -106,6 +193,7 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
   const [projectList, setProjectList] = useState<any[]>([]);
   const [issuesByProject, setIssuesByProject] = useState<Record<string, any[]>>({});
   const [loadingProject, setLoadingProject] = useState<string>();
+  const [creatingKey, setCreatingKey] = useState<string>();
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [summary, setSummary] = useState<DayActivitySummary | null>(stored ? { overview: stored.overview, projects: [] } : null);
   const [rows, setRows] = useState<SuggestionRow[]>(() => (stored?.rows || []).map((r) => ({ ...r, checked: !r.added })));
@@ -195,7 +283,10 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
 
   const claudeProjects: any[] = agentHistory?.claude?.projects || [];
   const antigravity: any[] = agentHistory?.antigravity?.conversations || [];
-  const hasAnyData = (activity?.activeMinutes || 0) > 0 || claudeProjects.length > 0 || antigravity.length > 0;
+  // Các agent khác (Codex, Gemini CLI, Kiro, Goose, opencode, Zed, Copilot CLI, Cline...) — mỗi nguồn có danh sách project
+  const otherAgents: { id: string; label: string; available: boolean; error?: string; projects: any[] }[] = agentHistory?.agents || [];
+  const otherProjectCount = otherAgents.reduce((n, a) => n + a.projects.length, 0);
+  const hasAnyData = (activity?.activeMinutes || 0) > 0 || claudeProjects.length > 0 || antigravity.length > 0 || otherProjectCount > 0;
 
   const handleSummarize = async () => {
     setIsSummarizing(true);
@@ -213,6 +304,17 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
               prompts: p.prompts,
             })),
             antigravity: antigravity.map((c) => ({ workspace: c.workspace, title: c.title, steps: c.steps, notes: c.notes })),
+            otherAgents: otherAgents.map((a) => ({
+              source: a.label,
+              projects: a.projects.map((p) => ({
+                project: p.name,
+                promptCount: p.promptCount,
+                estimatedMinutes: p.estimatedMinutes,
+                from: p.firstAt,
+                to: p.lastAt,
+                prompts: p.prompts,
+              })),
+            })),
           },
           activity: activity && {
             activeMinutes: activity.activeMinutes,
@@ -264,8 +366,19 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project: project.id, status: "open", limit: 100 }),
       });
-      const issues = await res.json();
-      setIssuesByProject((prev) => ({ ...prev, [projectName]: Array.isArray(issues) ? issues : [] }));
+      const data = await res.json();
+      const issues: any[] = Array.isArray(data) ? data : [];
+      setIssuesByProject((prev) => ({ ...prev, [projectName]: issues }));
+      // Dòng chưa gắn task: tự chọn task lá khớp rõ với tên công việc (không chọn issue cha)
+      const parentIds = new Set(issues.map((i) => i.parent?.id).filter(Boolean));
+      const leaves = issues.filter((i) => !parentIds.has(i.id));
+      setRows((prev) =>
+        prev.map((r) => {
+          if (r.redmineProject !== projectName || r.redmineIssue || r.added) return r;
+          const match = matchTaskByName(r.name, leaves);
+          return match ? { ...r, redmineIssue: match.id } : r;
+        })
+      );
     } catch {
       setIssuesByProject((prev) => ({ ...prev, [projectName]: [] }));
     } finally {
@@ -289,6 +402,94 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
   };
 
   const patchRow = (key: string, patch: Partial<SuggestionRow>) => setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+
+  // Issue có task con trong danh sách của project là issue cha
+  const parentIdsOf = (projectName?: string) => {
+    const list: any[] = issuesByProject[projectName || ""] || [];
+    return new Set(list.map((i) => i.parent?.id).filter(Boolean));
+  };
+
+  // Tạo task cha (nhập tay, là con của một task khác hoặc gốc) rồi tạo task AI của dòng làm con của nó.
+  // Task AI luôn là subtask; dòng được trỏ tới task con mới để log.
+  const createParentAndChild = async (row: SuggestionRow, title: string, parentIssueId?: number): Promise<boolean> => {
+    const projectName = row.redmineProject;
+    const project = projectList.find((p) => p.name === projectName);
+    const childSubject = applyTaskPrefix(taskPrefix, row.name);
+    if (!projectName || !project) return false;
+    if (!title) {
+      antdMessage.warning("Nhập tên task trước!");
+      return false;
+    }
+    if (!childSubject) {
+      antdMessage.warning("Dòng tóm tắt chưa có tên task!");
+      return false;
+    }
+    const post = async (body: object) => {
+      const res = await fetch("/api/redmine/create-issue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!data?.id) throw new Error(data?.error || "Không tạo được task");
+      return data;
+    };
+    setCreatingKey(row.key);
+    let parentTask: any;
+    try {
+      parentTask = await post({ project: project.id, parent: parentIssueId, subject: title, allowRoot: true });
+      const child = await post({ parent: parentTask.id, subject: childSubject, estimatedHours: row.hours || undefined });
+      const parentIssue = {
+        id: parentTask.id,
+        subject: parentTask.subject || title,
+        project: { id: project.id, name: projectName },
+        parent: parentIssueId ? { id: parentIssueId } : undefined,
+      };
+      const childIssue = { id: child.id, subject: child.subject || childSubject, project: parentIssue.project, parent: { id: parentTask.id } };
+      setIssuesByProject((prev) => ({ ...prev, [projectName]: [...(prev[projectName] || []), parentIssue, childIssue] }));
+      patchRow(row.key, { redmineIssue: child.id });
+      antdMessage.success(`Đã tạo task #${parentTask.id} và subtask #${child.id}`);
+      return true;
+    } catch (e: any) {
+      antdMessage.error(parentTask ? `Đã tạo task #${parentTask.id} nhưng không tạo được subtask: ${e.message}` : e.message);
+      return false;
+    } finally {
+      setCreatingKey(undefined);
+    }
+  };
+
+  // Đặt task AI của dòng làm con của một task có sẵn (kể cả task cha đã có task con)
+  const attachUnder = async (row: SuggestionRow, parentIssueId: number): Promise<boolean> => {
+    const projectName = row.redmineProject;
+    const subject = applyTaskPrefix(taskPrefix, row.name);
+    if (!projectName) return false;
+    if (!subject) {
+      antdMessage.warning("Dòng tóm tắt chưa có tên task!");
+      return false;
+    }
+    setCreatingKey(row.key);
+    try {
+      const res = await fetch("/api/redmine/create-issue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parent: parentIssueId, subject, estimatedHours: row.hours || undefined }),
+      });
+      const child = await res.json();
+      if (!child?.id) throw new Error(child?.error || "Không tạo được subtask");
+      const parent = (issuesByProject[projectName] || []).find((i) => i.id === parentIssueId);
+      const childIssue = { id: child.id, subject: child.subject || subject, project: parent?.project, parent: { id: parentIssueId } };
+      setIssuesByProject((prev) => ({ ...prev, [projectName]: [...(prev[projectName] || []), childIssue] }));
+      patchRow(row.key, { redmineIssue: child.id });
+      antdMessage.success(`Đã tạo subtask #${child.id} dưới #${parentIssueId}`);
+      return true;
+    } catch (e: any) {
+      antdMessage.error(e.message);
+      return false;
+    } finally {
+      setCreatingKey(undefined);
+    }
+  };
+
   const selected = rows.filter((r) => r.checked && !r.added && r.name.trim() && r.hours > 0);
   const selectedHours = selected.reduce((s, r) => s + r.hours, 0);
 
@@ -429,7 +630,7 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
                 </Space>
               }
             >
-              {claudeProjects.length === 0 && antigravity.length === 0 ? (
+              {claudeProjects.length === 0 && antigravity.length === 0 && otherProjectCount === 0 ? (
                 <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Không có hoạt động AI agent trong ngày" />
               ) : (
                 <Collapse
@@ -456,6 +657,28 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
                         </ul>
                       ),
                     })),
+                    ...otherAgents.flatMap((a) =>
+                      a.projects.map((p) => ({
+                        key: `o-${a.id}-${p.project}`,
+                        label: (
+                          <Space wrap>
+                            <Tag color="cyan">{a.label}</Tag>
+                            <Text strong>{p.name}</Text>
+                            <Tag>~{fmtMinutes(p.estimatedMinutes)}</Tag>
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              {p.promptCount} prompt · {p.firstAt}–{p.lastAt}
+                            </Text>
+                          </Space>
+                        ),
+                        children: (
+                          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                            {p.prompts.map((t: string, i: number) => (
+                              <li key={i}>{t}</li>
+                            ))}
+                          </ul>
+                        ),
+                      }))
+                    ),
                     ...antigravity.map((c) => ({
                       key: `a-${c.id}`,
                       label: (
@@ -473,7 +696,7 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
                   ]}
                 />
               )}
-              {[agentHistory.claude, agentHistory.antigravity]
+              {[agentHistory.claude, agentHistory.antigravity, ...otherAgents]
                 .filter((s: any) => s && !s.available && s.error)
                 .map((s: any, i: number) => (
                   <Text key={i} type="secondary" style={{ display: "block", fontSize: 11 }}>
@@ -535,7 +758,8 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
                               showSearch
                               disabled={r.added}
                               placeholder="Dự án Redmine"
-                              style={{ width: 220 }}
+                              style={{ width: 240 }}
+                              popupMatchSelectWidth={false}
                               value={r.redmineProject}
                               onChange={(v) => setRowProject(r, v)}
                               options={redmineProjects.map((p) => ({ value: p, label: p }))}
@@ -547,14 +771,15 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
                               disabled={r.added || !r.redmineProject}
                               loading={loadingProject === r.redmineProject}
                               placeholder={r.redmineProject ? "Task của dự án…" : "Chọn dự án trước"}
-                              style={{ width: 300 }}
+                              style={{ width: 360 }}
+                              popupMatchSelectWidth={false}
                               value={r.redmineIssue}
                               optionFilterProp="label"
                               onChange={(v) => patchRow(r.key, { redmineIssue: v ?? undefined })}
                               options={(() => {
                                 const list: any[] = issuesByProject[r.redmineProject || ""] || [];
                                 // Issue có task con trong danh sách là issue cha: không log trực tiếp vào đó
-                                const parentIds = new Set(list.map((i) => i.parent?.id).filter(Boolean));
+                                const parentIds = parentIdsOf(r.redmineProject);
                                 return list.map((i: any) => {
                                   const isParent = parentIds.has(i.id);
                                   return {
@@ -565,6 +790,14 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
                                 });
                               })()}
                             />
+                            {!r.added && r.redmineProject && (
+                              <NewParentTaskPopover
+                                issues={issuesByProject[r.redmineProject] || []}
+                                loading={creatingKey === r.key}
+                                onCreate={(title, parentId) => createParentAndChild(r, title, parentId)}
+                                onAttach={(parentId) => attachUnder(r, parentId)}
+                              />
+                            )}
                             {r.added && <Tag color="success">Đã tạo task</Tag>}
                           </Space>
                           {r.evidence && (
