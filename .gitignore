@@ -22,3 +22,23 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Desktop build
+dist-electron
+release
+build/bin
+build/.go-cache
+
+# Secrets
+.env
+.env.*
+
+# Dữ liệu Redmine nội bộ / dữ liệu runtime
+current_tasks.json
+issues.txt
+issues_full.txt
+logged_issues.txt
+download-page/release.js
+
+# Dữ liệu theo dõi hoạt động trên máy (riêng tư)
+activity/

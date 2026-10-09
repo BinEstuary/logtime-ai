@@ -1,0 +1,49 @@
+name: Download page
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches: [main]
+    paths: ['download-page/**']
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Ghi thông tin release mới nhất vào trang lúc deploy để trình duyệt không phải gọi GitHub API
+      - name: Generate release.js
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/releases/latest" > latest.json; then
+            DATA=$(jq -c '{version: .tag_name, publishedAt: .published_at, htmlUrl: .html_url,
+                 assets: [.assets[] | {name, size, url: .browser_download_url}]}' latest.json)
+          else
+            DATA='{}'
+          fi
+          echo "window.RELEASE_DATA = $DATA;" > download-page/release.js
+          cat download-page/release.js
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: download-page
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

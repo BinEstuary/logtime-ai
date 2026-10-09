@@ -1,73 +1,45 @@
-# React + TypeScript + Vite
+![LogTime AI](docs/assets/banner.webp)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+# LogTime AI
 
-Currently, two official plugins are available:
+Trợ lý log time cho Redmine: lập kế hoạch công việc theo ngày/tuần, để AI phân bổ đủ 8 giờ, rồi đồng bộ lên Redmine.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+![Không gian làm việc](docs/assets/workspace.webp)
 
-## React Compiler
+## Tính năng
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **LogTime hàng ngày / theo tuần** — thêm task thủ công, nhập nhanh từ văn bản thô, AI phân bổ đủ 8.0 giờ mỗi ngày.
+- **Thời gian đã báo cáo** — lịch sử spent time trên Redmine theo ngày, đánh dấu ngày chưa log.
+- **Dashboard Redmine** — ticket của bạn, biểu đồ trạng thái/độ ưu tiên/dự án, heatmap 6 tháng.
+- **Thống kê nhóm** — tổng giờ và trung bình mỗi ngày của từng thành viên trong tháng.
 
-## Expanding the ESLint configuration
+## Chạy ở chế độ phát triển
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+git clone --recurse-submodules <repo-url>   # redmine-cli-src là git submodule
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Cần cài [redmine CLI](redmine-cli-src) tại `~/.local/bin/redmine` (hoặc đặt biến `REDMINE_BIN`) và cấu hình server/API key trong mục **Cấu hình**.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Bản desktop (Linux, Windows, macOS)
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+App desktop dùng Electron và đã kèm sẵn redmine CLI cho từng nền tảng.
+
+```bash
+npm run desktop      # build và mở app để thử
+npm run dist:linux   # release/*.AppImage, *.deb
+npm run dist:win     # release/*.exe (trình cài NSIS)
+npm run dist:mac     # release/*.dmg — chạy trên macOS
+```
+
+Script `build:redmine` biên dịch redmine CLI bằng Go nếu có, nếu không thì dùng Docker. Workflow `.github/workflows/desktop.yml` build cả 3 nền tảng trên GitHub Actions.
+
+Các bản build chưa được ký số, nên Windows SmartScreen và macOS Gatekeeper sẽ cảnh báo khi mở lần đầu.
+
+## Triển khai lên k3s
+
+```bash
+./deploy.sh
 ```

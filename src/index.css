@@ -21,6 +21,14 @@
   --glow-border-1: rgba(240, 238, 230, 0.25);
   --glow-shadow-2: 0 0 25px rgba(240, 238, 230, 0.35);
   --glow-border-2: rgba(240, 238, 230, 0.6);
+  --card-bg: #1d1d1c;
+  --surface-subtle: rgba(255, 255, 255, 0.025);
+  --surface-muted: rgba(255, 255, 255, 0.05);
+  --danger-color: #e5918a;
+  --danger-bg: rgba(220, 38, 38, 0.08);
+  --danger-border: rgba(220, 38, 38, 0.35);
+  --accent-color: #d97757;
+  --chart-grid: rgba(255, 255, 255, 0.08);
 }
 
 [data-theme="light"] {
@@ -44,6 +52,14 @@
   --glow-border-1: rgba(94, 93, 89, 0.25);
   --glow-shadow-2: 0 0 25px rgba(94, 93, 89, 0.35);
   --glow-border-2: rgba(94, 93, 89, 0.6);
+  --card-bg: #ffffff;
+  --surface-subtle: rgba(0, 0, 0, 0.02);
+  --surface-muted: rgba(0, 0, 0, 0.05);
+  --danger-color: #b42318;
+  --danger-bg: #fdf3f2;
+  --danger-border: #f4c5c0;
+  --accent-color: #c6613f;
+  --chart-grid: rgba(0, 0, 0, 0.08);
 }
 
 body {
@@ -77,12 +93,193 @@ body {
   border-radius: 16px;
   box-shadow: var(--glass-shadow);
   padding: 24px;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: border-color 0.2s ease;
 }
 
 .glass-panel:hover {
-  border-color: var(--primary-color);
-  box-shadow: var(--glass-shadow);
+  border-color: var(--glow-border-1);
+}
+
+/* antd Cards using glass-panel: let header/body own the padding so the header divider spans edge to edge */
+.ant-card.glass-panel {
+  padding: 0;
+  border-radius: 12px;
+}
+
+.ant-card.glass-panel > .ant-card-head {
+  border-bottom: 1px solid var(--glass-border);
+  padding: 0 20px;
+  min-height: 56px;
+}
+
+.ant-card.glass-panel > .ant-card-head .ant-card-head-title {
+  white-space: normal;
+}
+
+.ant-card.glass-panel + .ant-card.glass-panel {
+  margin-top: 24px;
+}
+
+/* Typography helpers */
+.panel-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel-title .anticon {
+  color: var(--text-secondary);
+}
+
+.panel-subtitle {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  display: block;
+  margin-top: 2px;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 0;
+}
+
+.field-label {
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.section-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-section {
+  border-top: 1px solid var(--glass-border);
+  padding-top: 20px;
+}
+
+.settings-section-title {
+  font-weight: 600;
+  margin-bottom: 16px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.callout {
+  background: var(--bubble-assistant-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
+/* Compact item rows inside day cards */
+.task-chip {
+  padding: 8px 10px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.15s ease;
+}
+
+.task-chip:hover {
+  border-color: var(--glow-border-1);
+}
+
+.task-chip[draggable="true"] {
+  cursor: grab;
+}
+
+.day-card-list {
+  min-height: 160px;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+.day-card.is-missing {
+  border-color: var(--danger-border) !important;
+  background: var(--danger-bg) !important;
+}
+
+.day-card.is-weekend {
+  background: var(--surface-subtle) !important;
+}
+
+.day-card.is-today {
+  border-color: var(--primary-color) !important;
+}
+
+.day-card.is-drop-target {
+  border: 1px dashed var(--primary-color) !important;
+}
+
+.chip-tag {
+  margin: 0 !important;
+  font-size: 11px !important;
+  background: var(--surface-muted) !important;
+  border: none !important;
+  color: var(--text-secondary) !important;
+}
+
+/* Sidebar */
+.sider-group-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  margin-left: 4px;
+}
+
+.app-sider .ant-menu-item-group + .ant-menu-item-group .sider-group-label {
+  display: block;
+  margin-top: 16px;
+}
+
+.app-sider .ant-menu-item {
+  border-radius: 8px;
+}
+
+.sider-backdrop {
+  display: none;
+}
+
+.mobile-nav-toggle {
+  display: none !important;
+}
+
+.header-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.header-subtitle {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.3;
 }
 
 /* Custom Scrollbar */
@@ -92,7 +289,7 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.4);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
@@ -299,7 +496,7 @@ body {
   .app-header {
     padding: 16px 20px !important;
   }
-  
+
   .app-content {
     padding: 20px 20px !important;
   }
@@ -307,40 +504,66 @@ body {
 
 @media (max-width: 768px) {
   .app-header {
-    flex-direction: column;
+    flex-wrap: wrap;
     height: auto !important;
+    min-height: 64px;
     gap: 12px;
-    padding: 16px !important;
-    align-items: flex-start !important;
+    padding: 12px 16px !important;
   }
-  
+
   .logo-text {
     font-size: 20px;
   }
-  
+
   .app-content {
     padding: 16px 12px !important;
   }
-  
+
   .chat-container {
     height: 380px;
     min-height: 380px;
   }
-  
+
   .glass-panel {
     padding: 16px;
   }
+
+  .header-subtitle {
+    display: none;
+  }
+}
+
+@keyframes timer-pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.7; }
+  100% { opacity: 1; }
+}
+
+.pomodoro-timer-active {
+  animation: timer-pulse 2s infinite ease-in-out;
 }
 
 /* Sidebar and Main Layout wrapper styles */
 .main-layout-wrapper {
-  margin-left: 260px;
+  margin-left: 280px;
   transition: all 0.2s ease-in-out;
 }
 
 @media (max-width: 992px) {
   .main-layout-wrapper {
     margin-left: 0 !important;
+  }
+
+  .mobile-nav-toggle {
+    display: inline-flex !important;
+  }
+
+  .sider-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 999;
   }
 }
 
@@ -408,3 +631,93 @@ body {
   box-shadow: 0 0 0 2px var(--primary-hover) !important;
 }
 
+/* ---- Thao tác & tương tác (theo HIG), dùng lại bảng màu sẵn có ---- */
+
+/* Trạng thái giờ: luôn có chữ đi kèm màu */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: var(--surface-muted);
+}
+.status-pill.ok { color: var(--success-color); }
+.status-pill.under { color: var(--warning-color); }
+.status-pill.over, .status-pill.missing { color: var(--danger-color); background: var(--danger-bg); }
+.status-pill.neutral { color: var(--text-secondary); }
+
+/* Thanh hành động ngữ cảnh khi chọn nhiều task */
+.selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 20px;
+  background: var(--primary-light);
+  border-bottom: 1px solid var(--glass-border);
+  font-size: 13px;
+}
+
+.field-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: block;
+  margin-top: 4px;
+}
+
+.settings-section-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: -12px 0 16px;
+}
+
+/* Nút Lưu luôn trong tầm mắt ở cuối form cài đặt */
+.settings-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 24px;
+  margin: 20px -24px -24px;
+  border-top: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  border-radius: 0 0 12px 12px;
+}
+
+.glass-stat-card .hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.task-chip[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.day-card.is-drop-target {
+  background: var(--primary-light) !important;
+}
+
+@media (max-width: 768px) {
+  /* Vùng chạm tối thiểu 44pt trên màn hình cảm ứng */
+  .ant-btn:not(.ant-btn-sm) {
+    min-height: 44px;
+  }
+}
+
+/* Tôn trọng "Giảm chuyển động" của hệ thống */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

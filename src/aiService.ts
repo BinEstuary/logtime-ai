@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import { chatJson, type AiConfig } from "./aiClient";
 
 export interface Task {
   id: string;
@@ -10,6 +10,7 @@ export interface Task {
   aiReason?: string;
   redmineIssue?: number; // Mã Issue trên Redmine
   redmineProject?: string; // Tên/ID dự án trên Redmine
+  isRecurring?: boolean; // Tự động lặp lại mỗi tuần
 }
 
 export interface ChatMessage {
@@ -17,28 +18,13 @@ export interface ChatMessage {
   content: string;
 }
 
-const DEFAULT_API_KEY = "";
-const BASE_URL = window.location.origin + "/api-z"; // Using Vite proxy to avoid CORS
-const MODEL_NAME = "glm-4.7-flash";
-
-function getOpenAIClient(customApiKey?: string) {
-  const apiKey = customApiKey || DEFAULT_API_KEY;
-  return new OpenAI({
-    apiKey: apiKey,
-    baseURL: BASE_URL,
-    dangerouslyAllowBrowser: true, // Required for running in browser
-  });
-}
-
 /**
  * Phân bổ thời gian cho danh sách task sao cho tổng bằng 8.0 giờ.
  */
 export async function distributeTasksWithAI(
   tasks: Task[],
-  customApiKey?: string
+  ai: AiConfig
 ): Promise<{ tasks: Task[]; explanation: string }> {
-  const openai = getOpenAIClient(customApiKey);
-
   const systemPrompt = `Bạn là một trợ lý AI quản lý công việc và logtime chuyên nghiệp. 
 Nhiệm vụ của bạn là nhận danh sách các task làm việc và phân bổ thời gian (duration) bằng giờ cho mỗi task sao cho:
 1. Tổng số giờ của tất cả các task phải đạt CHÍNH XÁC 8.0 giờ (không được thừa, không được thiếu, ví dụ: 1.5 + 2.0 + 0.5 + 4.0 = 8.0).
@@ -81,16 +67,10 @@ Lưu ý: Chỉ trả về JSON hợp lệ, không viết thêm text gì ngoài J
     }))
   );
 
-  const response = await openai.chat.completions.create({
-    model: MODEL_NAME,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: `Hãy phân bổ danh sách task sau: ${userContent}` },
-    ],
-    response_format: { type: "json_object" },
-  });
-
-  const resultText = response.choices[0].message.content || "";
+  const resultText = await chatJson(ai, [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: `Hãy phân bổ danh sách task sau: ${userContent}` },
+  ]);
   try {
     const data = JSON.parse(resultText);
     const updatedTasks = tasks.map((originalTask) => {
@@ -123,10 +103,8 @@ export async function adjustTasksWithChat(
   tasks: Task[],
   message: string,
   chatHistory: ChatMessage[],
-  customApiKey?: string
+  ai: AiConfig
 ): Promise<{ tasks: Task[]; aiMessage: string }> {
-  const openai = getOpenAIClient(customApiKey);
-
   const systemPrompt = `Bạn là một trợ lý AI quản lý công việc và logtime chuyên nghiệp.
 Người dùng đang có danh sách task đã được phân bổ giờ như sau:
 ${JSON.stringify(
@@ -180,13 +158,7 @@ Lưu ý: Chỉ trả về JSON hợp lệ, không viết thêm text gì ngoài J
     { role: "user", content: message },
   ];
 
-  const response = await openai.chat.completions.create({
-    model: MODEL_NAME,
-    messages: messages as any,
-    response_format: { type: "json_object" },
-  });
-
-  const resultText = response.choices[0].message.content || "";
+  const resultText = await chatJson(ai, messages as any);
   try {
     const data = JSON.parse(resultText);
     
@@ -219,10 +191,8 @@ Lưu ý: Chỉ trả về JSON hợp lệ, không viết thêm text gì ngoài J
  */
 export async function parseRawTasksWithAI(
   rawText: string,
-  customApiKey?: string
+  ai: AiConfig
 ): Promise<{ date: string; tasks: Task[]; explanation: string }> {
-  const openai = getOpenAIClient(customApiKey);
-
   const systemPrompt = `Bạn là một trợ lý AI quản lý công việc và logtime chuyên nghiệp.
 Nhiệm vụ của bạn là phân tích một đoạn văn bản thô do người dùng nhập vào. Đoạn văn bản này thường bao gồm ngày tháng làm việc và danh sách các đầu mục công việc (tasks).
 
@@ -255,16 +225,10 @@ Hãy thực hiện các yêu cầu sau:
 
 Lưu ý: Chỉ trả về JSON hợp lệ, không viết thêm text gì ngoài JSON đó.`;
 
-  const response = await openai.chat.completions.create({
-    model: MODEL_NAME,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: `Hãy phân tích văn bản sau:\n${rawText}` },
-    ],
-    response_format: { type: "json_object" },
-  });
-
-  const resultText = response.choices[0].message.content || "";
+  const resultText = await chatJson(ai, [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: `Hãy phân tích văn bản sau:\n${rawText}` },
+  ]);
   try {
     const data = JSON.parse(resultText);
     const rawTasks = data.tasks || [];
@@ -294,10 +258,8 @@ Lưu ý: Chỉ trả về JSON hợp lệ, không viết thêm text gì ngoài J
  */
 export async function distributeWeekTasksWithAI(
   weeklyTasks: { [date: string]: Task[] },
-  customApiKey?: string
+  ai: AiConfig
 ): Promise<{ weeklyTasks: { [date: string]: Task[] }; explanation: string }> {
-  const openai = getOpenAIClient(customApiKey);
-
   const systemPrompt = `Bạn là một trợ lý AI quản lý logtime và công việc tuần chuyên nghiệp.
 Nhiệm vụ của bạn là nhận dữ liệu công việc của nhiều ngày trong tuần (được gom theo từng ngày YYYY-MM-DD) và phân bổ thời gian cho từng ngày độc lập sao cho:
 1. Đối với MỖI ngày, tổng số giờ của tất cả các task của ngày đó phải đạt CHÍNH XÁC 8.0 giờ (không được thừa, không được thiếu). Nếu một ngày không có task nào, hãy bỏ qua hoặc gán 0 giờ cho ngày đó.
@@ -339,16 +301,10 @@ Lưu ý: Chỉ trả về JSON hợp lệ, không viết thêm text gì ngoài J
     }));
   }
 
-  const response = await openai.chat.completions.create({
-    model: MODEL_NAME,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: `Hãy phân bổ danh sách task tuần sau:\n${JSON.stringify(inputPayload)}` },
-    ],
-    response_format: { type: "json_object" },
-  });
-
-  const resultText = response.choices[0].message.content || "";
+  const resultText = await chatJson(ai, [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: `Hãy phân bổ danh sách task tuần sau:\n${JSON.stringify(inputPayload)}` },
+  ]);
   try {
     const data = JSON.parse(resultText);
     const resultWeeklyTasks = data.weeklyTasks || {};
@@ -382,3 +338,120 @@ Lưu ý: Chỉ trả về JSON hợp lệ, không viết thêm text gì ngoài J
   }
 }
 
+/**
+ * Tạo tóm tắt AI cho tuần làm việc.
+ */
+export async function generateWeeklySummaryWithAI(
+  weeklyTasks: { [date: string]: Task[] },
+  spentTimeEntries: any[],
+  ai: AiConfig
+): Promise<{ summary: string }> {
+  // Tính tổng giờ từng ngày
+  const dayStats: { date: string; planned: number; logged: number; tasks: string[] }[] = [];
+  for (const date of Object.keys(weeklyTasks).sort()) {
+    const tasks = weeklyTasks[date] || [];
+    const planned = tasks.reduce((s, t) => s + (t.duration || 0), 0);
+    const logged = spentTimeEntries
+      .filter((e: any) => e.spent_on === date)
+      .reduce((s: number, e: any) => s + (e.hours || 0), 0);
+    dayStats.push({ date, planned, logged, tasks: tasks.map(t => t.name) });
+  }
+
+  const systemPrompt = `Bạn là trợ lý AI phân tích hiệu suất làm việc hàng tuần. 
+Hãy viết một bản tóm tắt tuần làm việc ngắn gọn, thân thiện bằng tiếng Việt với các phần:
+1. 📊 Tổng quan tuần (tổng giờ kế hoạch, tổng giờ đã log, % hoàn thành)
+2. ✅ Điểm mạnh (những ngày làm tốt, tasks hoàn thành)
+3. ⚠️ Điểm cần cải thiện (ngày thiếu giờ, task chưa log)
+4. 💡 Đề xuất tuần tới (3 gợi ý cụ thể)
+
+Chỉ trả về JSON với trường "summary" là chuỗi markdown.`;
+
+  const userContent = `Dữ liệu tuần:\n${JSON.stringify(dayStats, null, 2)}`;
+
+  const resultText = (await chatJson(ai, [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userContent },
+  ])) || "{}";
+  try {
+    const data = JSON.parse(resultText);
+    return { summary: data.summary || "Không thể tạo tóm tắt." };
+  } catch {
+    return { summary: "Không thể tạo tóm tắt tuần. Vui lòng thử lại." };
+  }
+}
+
+export interface DayActivityTaskSuggestion {
+  name: string;
+  hours: number;
+  evidence: string;
+}
+
+export interface DayActivityProjectSummary {
+  workspace: string;
+  redmineProjectGuess?: string;
+  minutes: number;
+  tasks: DayActivityTaskSuggestion[];
+}
+
+export interface DayActivitySummary {
+  overview: string;
+  projects: DayActivityProjectSummary[];
+}
+
+/**
+ * Tóm tắt hoạt động trong ngày (lịch sử AI agent + thời gian dùng máy) theo dự án và gợi ý task để log.
+ */
+export async function summarizeDayActivityWithAI(
+  input: {
+    date: string;
+    agentHistory: any;
+    activity: any;
+    loggedEntries: { project?: string; issue?: number; hours: number; comments: string }[];
+    plannedTasks: string[];
+    knownRedmineProjects: string[];
+  },
+  ai: AiConfig
+): Promise<DayActivitySummary> {
+  const loggedHours = input.loggedEntries.reduce((s, e) => s + (Number(e.hours) || 0), 0);
+  const activeHours = (input.activity?.activeMinutes || 0) / 60;
+  const budget = Math.max(0, Math.min(8 - loggedHours, activeHours > 0 ? activeHours : 8));
+
+  const systemPrompt = `Bạn là trợ lý tổng hợp hoạt động làm việc trong ngày để log time lên Redmine.
+Dữ liệu gồm: lịch sử làm việc với AI agent (Claude Code: prompt theo thư mục project; Antigravity: hội thoại theo workspace),
+thời gian dùng máy (activeMinutes, timeline, app/cửa sổ nếu có), các entry đã log và các task đã có trong kế hoạch.
+
+Hãy:
+1. Gom hoạt động theo dự án (workspace/thư mục). Bỏ qua hoạt động vặt, không liên quan công việc.
+2. Với mỗi dự án, gợi ý 1-4 task, đặt tên ngắn gọn theo kiểu tiêu đề task Redmine bằng tiếng Việt (ví dụ "Xây dựng màn hình xác nhận log time"), kèm "evidence" là bằng chứng ngắn từ dữ liệu.
+3. Số giờ mỗi task là bội số của 0.5, tối thiểu 0.5. TỔNG giờ gợi ý KHÔNG vượt quá ${budget.toFixed(1)}h (8h trừ giờ đã log, và không vượt thời gian thực sự dùng máy).
+4. KHÔNG gợi ý lại việc đã log hoặc đã có trong kế hoạch.
+5. "redmineProjectGuess": nếu đoán được dự án Redmine tương ứng thì chọn đúng tên trong danh sách dự án Redmine được cung cấp, nếu không chắc thì bỏ trống.
+6. "overview": 2-4 câu tiếng Việt tóm tắt ngày làm việc.
+
+Chỉ trả về JSON:
+{"overview": "...", "projects": [{"workspace": "logtime", "redmineProjectGuess": "...", "minutes": 120, "tasks": [{"name": "...", "hours": 1.5, "evidence": "..."}]}]}`;
+
+  const resultText =
+    (await chatJson(ai, [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: JSON.stringify(input) },
+    ])) || "{}";
+  try {
+    const data = JSON.parse(resultText);
+    const projects: DayActivityProjectSummary[] = (Array.isArray(data.projects) ? data.projects : []).map((p: any) => ({
+      workspace: String(p.workspace || "Khác"),
+      redmineProjectGuess: p.redmineProjectGuess || undefined,
+      minutes: Number(p.minutes) || 0,
+      tasks: (Array.isArray(p.tasks) ? p.tasks : [])
+        .filter((t: any) => t && t.name)
+        .map((t: any) => ({
+          name: String(t.name),
+          hours: Math.max(0.5, Math.round((Number(t.hours) || 0.5) * 2) / 2),
+          evidence: String(t.evidence || ""),
+        })),
+    }));
+    return { overview: String(data.overview || ""), projects };
+  } catch {
+    return { overview: "Không thể phân tích kết quả AI. Vui lòng thử lại.", projects: [] };
+  }
+}

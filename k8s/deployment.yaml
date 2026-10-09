@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logtime-app
+  namespace: default
+  labels:
+    app: logtime
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: logtime
+  template:
+    metadata:
+      labels:
+        app: logtime
+    spec:
+      containers:
+      - name: logtime
+        image: logtime:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 5173
+          name: http
+        volumeMounts:
+        - name: host-home
+          mountPath: /root/.redmine-cli.yaml
+          subPath: .redmine-cli.yaml
+        - name: host-workspace
+          mountPath: /home/binnguyen/Estuary/Test/logtime/current_tasks.json
+          subPath: current_tasks.json
+      volumes:
+      - name: host-home
+        hostPath:
+          path: /home/binnguyen
+          type: Directory
+      - name: host-workspace
+        hostPath:
+          path: /home/binnguyen/Estuary/Test/logtime
+          type: Directory
+apiVersion: v1
+kind: Service
+metadata:
+  name: logtime-service
+  namespace: default
+spec:
+  type: ClusterIP
+  selector:
+    app: logtime
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 5173
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: logtime-ingress
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: traefik
+spec:
+  rules:
+  - host: logtime.estuary
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: logtime-service
+            port:
+              number: 80
+

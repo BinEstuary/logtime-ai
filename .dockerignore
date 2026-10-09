@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.gitignore
+README.md
+*.log
+*.txt
+release
+dist-electron
+build/bin
+build/.go-cache
+activity

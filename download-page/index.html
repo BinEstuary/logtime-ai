@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tải LogTime AI</title>
+  <link rel="icon" type="image/png" href="favicon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Lora:wght@500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --body-bg: #faf9f5;
+      --card-bg: #ffffff;
+      --border: #d1d0c5;
+      --text-primary: #141413;
+      --text-secondary: #5e5d59;
+      --surface-muted: rgba(0, 0, 0, 0.04);
+      --accent-color: #d97757;
+      --accent-hover: #c4633f;
+      --accent-text: #ffffff;
+      --warning-color: #9a6a2f;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --body-bg: #141413;
+        --card-bg: #1d1d1c;
+        --border: #30302e;
+        --text-primary: #faf9f5;
+        --text-secondary: #a19f99;
+        --surface-muted: rgba(255, 255, 255, 0.05);
+        --accent-color: #d97757;
+        --accent-hover: #e48a6c;
+        --accent-text: #141413;
+        --warning-color: #e9c46a;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--body-bg);
+      color: var(--text-primary);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.5;
+    }
+    main { max-width: 880px; margin: 0 auto; padding: 48px 16px 64px; }
+    a { color: var(--accent-color); }
+
+    .hero { text-align: center; }
+    .hero img { width: 96px; height: 96px; }
+    .hero h1 { font-family: 'Lora', Georgia, serif; font-weight: 600; font-size: 2.25rem; margin: 12px 0 4px; }
+    .hero p { color: var(--text-secondary); margin: 0; }
+    .meta { margin-top: 8px; font-size: 0.875rem; color: var(--text-secondary); }
+
+    .primary { margin: 32px 0 8px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+    .btn-primary {
+      display: inline-flex; align-items: center; gap: 10px;
+      padding: 14px 28px; border-radius: 12px;
+      background: var(--accent-color); color: var(--accent-text);
+      font-weight: 600; font-size: 1.05rem; text-decoration: none;
+      transition: background 0.15s;
+    }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .primary small { color: var(--text-secondary); text-align: center; }
+
+    h2 { font-size: 1.1rem; font-weight: 600; margin: 48px 0 16px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+    .card {
+      display: flex; flex-direction: column; gap: 4px;
+      padding: 16px; border: 1px solid var(--border); border-radius: 12px;
+      background: var(--card-bg); color: inherit; text-decoration: none;
+      transition: border-color 0.15s;
+    }
+    a.card:hover { border-color: var(--accent-color); }
+    .card .os { font-weight: 600; }
+    .card .file { font-size: 0.8rem; color: var(--text-secondary); word-break: break-all; }
+    .card .size { font-size: 0.8rem; color: var(--text-secondary); }
+    .card.missing { opacity: 0.6; }
+    .card.missing .size { color: var(--warning-color); }
+
+    details {
+      border: 1px solid var(--border); border-radius: 12px;
+      background: var(--card-bg); padding: 12px 16px; margin-bottom: 8px;
+    }
+    summary { cursor: pointer; font-weight: 500; }
+    details ol { margin: 8px 0 0; padding-left: 20px; color: var(--text-secondary); }
+    details li { margin: 4px 0; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em;
+      background: var(--surface-muted); padding: 2px 6px; border-radius: 6px; word-break: break-all;
+    }
+
+    footer { margin-top: 40px; text-align: center; font-size: 0.875rem; color: var(--text-secondary); }
+
+    @media (max-width: 480px) {
+      main { padding-top: 32px; }
+      .hero h1 { font-size: 1.75rem; }
+      .btn-primary { width: 100%; justify-content: center; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <img src="logo.png" alt="" />
+      <h1>LogTime AI</h1>
+      <p>Trợ lý ghi nhận thời gian làm việc trên Redmine</p>
+      <div class="meta" id="meta">Đang tải thông tin phiên bản…</div>
+    </section>
+
+    <section class="primary" id="primary"></section>
+
+    <h2>Tất cả bản cài đặt</h2>
+    <div class="grid" id="grid"></div>
+
+    <h2>Hướng dẫn cài đặt</h2>
+    <p class="meta" style="margin:-8px 0 12px">App chưa được ký số nên hệ điều hành có thể cảnh báo khi mở lần đầu.</p>
+    <details id="guide-windows">
+      <summary>Windows</summary>
+      <ol>
+        <li>Chạy file <code>.exe</code> vừa tải.</li>
+        <li>Nếu hiện cảnh báo SmartScreen: bấm <b>More info</b> → <b>Run anyway</b>.</li>
+        <li>Làm theo trình cài đặt.</li>
+      </ol>
+    </details>
+    <details id="guide-mac">
+      <summary>macOS</summary>
+      <ol>
+        <li>Chọn bản <b>Apple Silicon</b> cho máy M1/M2/M3/M4, bản <b>Intel</b> cho máy đời cũ.</li>
+        <li>Mở file <code>.dmg</code>, kéo LogTime AI vào thư mục Applications.</li>
+        <li>Lần đầu mở: chuột phải vào app → <b>Open</b> → <b>Open</b>.</li>
+        <li>Nếu báo app "bị hỏng": chạy <code>xattr -cr "/Applications/LogTime AI.app"</code> trong Terminal.</li>
+      </ol>
+    </details>
+    <details id="guide-linux">
+      <summary>Linux</summary>
+      <ol>
+        <li>AppImage: <code>chmod +x LogTime-AI-*.AppImage</code> rồi chạy file.</li>
+        <li>Ubuntu/Debian: <code>sudo apt install ./LogTime-AI-*.deb</code></li>
+      </ol>
+    </details>
+
+    <footer>
+      <a id="all-releases" href="#">Tất cả phiên bản</a> · Estuary Solutions
+    </footer>
+  </main>
+
+  <!-- release.js gán window.RELEASE_DATA; nạp bằng thẻ script để chạy được cả khi mở file:// -->
+  <script src="release.js"></script>
+  <script>
+    const PLATFORMS = [
+      { id: 'win', os: 'windows', label: 'Windows', detail: 'Bộ cài (.exe)', match: /win-x64\.exe$/ },
+      { id: 'mac-arm64', os: 'mac', label: 'macOS Apple Silicon', detail: 'M1 trở lên (.dmg)', match: /mac-arm64\.dmg$/ },
+      { id: 'mac-x64', os: 'mac', label: 'macOS Intel', detail: 'Máy Intel (.dmg)', match: /mac-x64\.dmg$/ },
+      { id: 'appimage', os: 'linux', label: 'Linux AppImage', detail: 'Mọi bản phân phối', match: /\.AppImage$/ },
+      { id: 'deb', os: 'linux', label: 'Linux .deb', detail: 'Ubuntu / Debian', match: /\.deb$/ },
+    ];
+    const PRIMARY_BY_OS = { windows: 'win', mac: 'mac-arm64', linux: 'appimage' };
+    const OS_NAMES = { windows: 'Windows', mac: 'macOS', linux: 'Linux' };
+
+    function detectOs() {
+      const p = (navigator.userAgentData?.platform || navigator.platform || navigator.userAgent).toLowerCase();
+      if (p.includes('win')) return 'windows';
+      if (p.includes('mac')) return 'mac';
+      if (p.includes('linux') && !/android/i.test(navigator.userAgent)) return 'linux';
+      return null;
+    }
+
+    function formatSize(bytes) {
+      return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+    }
+
+    function el(tag, attrs, children) {
+      const node = document.createElement(tag);
+      Object.assign(node, attrs);
+      for (const child of [].concat(children || [])) node.append(child);
+      return node;
+    }
+
+    function render(release) {
+      const releasesUrl = release.htmlUrl ? release.htmlUrl.replace(/\/tag\/[^/]+$/, '') : null;
+      const allReleases = document.getElementById('all-releases');
+      if (releasesUrl) allReleases.href = releasesUrl;
+      else allReleases.remove();
+
+      const assets = Array.isArray(release.assets) ? release.assets : [];
+      const found = Object.fromEntries(PLATFORMS.map(p => [p.id, assets.find(a => p.match.test(a.name))]));
+
+      const meta = document.getElementById('meta');
+      if (release.version) {
+        const date = release.publishedAt ? new Date(release.publishedAt).toLocaleDateString('vi-VN') : '';
+        meta.textContent = `Phiên bản ${release.version}${date ? ' · phát hành ' + date : ''}`;
+      } else {
+        meta.textContent = 'Chưa có bản phát hành nào.';
+      }
+
+      const grid = document.getElementById('grid');
+      grid.replaceChildren(...PLATFORMS.map(p => {
+        const asset = found[p.id];
+        const body = [
+          el('span', { className: 'os', textContent: p.label }),
+          el('span', { className: 'file', textContent: asset ? asset.name : p.detail }),
+          el('span', { className: 'size', textContent: asset ? formatSize(asset.size) : 'Chưa có bản cho nền tảng này' }),
+        ];
+        return asset
+          ? el('a', { className: 'card', href: asset.url }, body)
+          : el('div', { className: 'card missing' }, body);
+      }));
+
+      const os = detectOs();
+      const primary = document.getElementById('primary');
+      const asset = os && found[PRIMARY_BY_OS[os]];
+      if (asset) {
+        const extra = [];
+        if (os === 'mac' && found['mac-x64']) {
+          extra.push('Máy Intel? ', el('a', { href: found['mac-x64'].url, textContent: 'Tải bản Intel' }));
+        }
+        primary.replaceChildren(
+          el('a', { className: 'btn-primary', href: asset.url, textContent: `⬇ Tải cho ${OS_NAMES[os]}` }),
+          el('small', {}, [`${asset.name} · ${formatSize(asset.size)}`]),
+          ...(extra.length ? [el('small', {}, extra)] : []),
+        );
+        document.getElementById(`guide-${os}`).open = true;
+      } else if (releasesUrl) {
+        primary.replaceChildren(
+          el('a', { className: 'btn-primary', href: releasesUrl, textContent: 'Xem trang phát hành' }),
+          el('small', { textContent: os ? `Chưa có bản cho ${OS_NAMES[os]} — chọn bản phù hợp bên dưới.` : 'Chọn bản phù hợp bên dưới.' }),
+        );
+      } else {
+        primary.replaceChildren();
+      }
+    }
+
+    render(window.RELEASE_DATA || {});
+  </script>
+</body>
+</html>

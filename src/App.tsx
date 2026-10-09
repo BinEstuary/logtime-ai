@@ -26,6 +26,11 @@ import {
   Menu,
   Spin,
   Pagination,
+  Avatar,
+  Alert,
+  Dropdown,
+  Tabs,
+  Segmented,
 } from "antd";
 import {
   PlusOutlined,
@@ -39,33 +44,66 @@ import {
   SendOutlined,
   ThunderboltOutlined,
   ClearOutlined,
-  EyeOutlined,
-  EyeInvisibleOutlined,
   HistoryOutlined,
   SunOutlined,
   MoonOutlined,
   CalendarOutlined,
   ArrowRightOutlined,
   ClockCircleOutlined,
+  BellOutlined,
+  DownloadOutlined as DownloadCSVOutlined,
+  AimOutlined,
+  ReloadOutlined,
+  FireOutlined,
+  PauseOutlined,
+  PlayCircleOutlined,
+  CloseOutlined,
+  MinusOutlined,
+  CheckCircleOutlined,
+  UploadOutlined,
+  FundViewOutlined,
+  LeftOutlined,
+  RightOutlined,
+  MoreOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import confetti from "canvas-confetti";
 import type { Task, ChatMessage } from "./aiService";
+import { loadAiSettings, resolveAiConfig, saveAiSettings, PROVIDERS, type AiSettings } from "./aiClient";
+import AiSettingsPanel from "./AiSettings";
+import LogTimeConfirmModal, { type LogEntryInput } from "./LogTimeConfirmModal";
+import ActivitySummaryModal from "./ActivitySummaryModal";
+import DaySummaryTree from "./DaySummaryTree";
+import { loadDaySummary, saveDaySummary, summaryRowToTask, type StoredDaySummary, type SummaryRow } from "./activitySummaryStore";
 import {
   distributeTasksWithAI,
   adjustTasksWithChat,
   parseRawTasksWithAI,
   distributeWeekTasksWithAI,
+  generateWeeklySummaryWithAI,
 } from "./aiService";
 import {
   DashboardOutlined,
   SearchOutlined,
   PlusCircleOutlined,
+  TeamOutlined,
+  MenuOutlined,
+  ProjectOutlined,
+  PieChartOutlined,
+  BarChartOutlined,
+  LineChartOutlined,
+  BulbOutlined,
+  ScheduleOutlined,
 } from "@ant-design/icons";
 import {
   analyzeRedmineMapping,
   extractSearchQuery,
 } from "./aiRedmineService";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
+  PieChart, Pie, Cell, ResponsiveContainer, Legend,
+  AreaChart, Area,
+} from "recharts";
 
 const { Header, Content, Footer, Sider } = Layout;
 const { Text } = Typography;
@@ -90,6 +128,33 @@ const DAY_NAMES_VI = [
   "Thứ Bảy",
 ];
 
+const PAGE_META: Record<"daily" | "weekly" | "dashboard" | "settings" | "spent_time" | "team", { title: string; subtitle: string }> = {
+  spent_time: { title: "Thời gian đã báo cáo", subtitle: "Thời gian đã log lên Redmine, theo từng ngày" },
+  daily: { title: "Kế hoạch ngày", subtitle: "" },
+  weekly: { title: "Kế hoạch tuần", subtitle: "" },
+  dashboard: { title: "Ticket của tôi", subtitle: "Ticket Redmine được giao cho bạn" },
+  team: { title: "Thống kê nhóm", subtitle: "Giờ đã log của các thành viên trong tháng này" },
+  settings: { title: "Cài đặt", subtitle: "AI, Redmine và nhắc nhở" },
+};
+
+// Màu & nhãn trạng thái giờ trong ngày — luôn đi kèm chữ, không chỉ dựa vào màu
+const getHoursStatus = (hours: number) => {
+  const h = Math.round(hours * 100) / 100;
+  if (h === 8) return { key: "ok" as const, color: "var(--success-color)", label: "Đủ 8h" };
+  if (h > 8) return { key: "over" as const, color: "var(--danger-color)", label: `Vượt ${(h - 8).toFixed(1)}h` };
+  return { key: "under" as const, color: "var(--warning-color)", label: `Thiếu ${(8 - h).toFixed(1)}h` };
+};
+
+// Hiệu ứng ăn mừng chỉ khi người dùng không bật "Giảm chuyển động"
+const celebrate = (opts: confetti.Options) => {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  confetti({ particleCount: 80, spread: 60, origin: { y: 0.7 }, ...opts });
+};
+
+// Warm, muted palette that matches the neutral theme (no saturated blue/purple)
+const CHART_COLORS = ["#d97757", "#8f9e8b", "#e0b25a", "#7f9cb0", "#b5838d", "#a3a380", "#9c8673"];
+const STATUS_COLORS = { danger: "#d9534f", warning: "#e0b25a", success: "#8f9e8b" };
+
 // Helper để lấy danh sách 7 ngày trong tuần của một ngày bất kỳ
 const getWeekDays = (dateStr: string) => {
   const current = dayjs(dateStr);
@@ -109,7 +174,7 @@ const formatVietnameseDate = (dateStr: string) => {
   const d = dayjs(dateStr);
   const daysOfWeek = ["Chủ Nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"];
   const dayName = daysOfWeek[d.day()];
-  return `${dayName}, Ngày ${d.format("DD/MM/YYYY")}`;
+  return `${dayName}, ${d.format("DD/MM/YYYY")}`;
 };
 
 // Helper để lấy ngày hôm nay theo giờ Việt Nam (Asia/Ho_Chi_Minh) dưới dạng YYYY-MM-DD
@@ -171,10 +236,85 @@ const generateDatesForFilter = (filter: "all" | "this_month" | "last_month", ent
   return dates.sort((a, b) => b.localeCompare(a));
 };
 
+// Component Heatmap kiểu GitHub
+// Trạng thái trống có minh hoạ nét vẽ, đổi màu nét theo theme
+const EmptyIllustration = ({ themeMode, description }: { themeMode: "light" | "dark"; description: string }) => (
+  <Empty
+    image={<img src={`/illustrations/empty-${themeMode}.png`} alt="" style={{ height: 140, width: "auto" }} />}
+    styles={{ image: { height: 140, marginBottom: 12 } }}
+    description={<span style={{ color: "var(--text-secondary)" }}>{description}</span>}
+    style={{ padding: "24px 0" }}
+  />
+);
+
+const LogTimeHeatmap = ({ entries, themeMode }: { entries: any[], themeMode: "light" | "dark" }) => {
+  const today = dayjs();
+  // Hiển thị 24 tuần (khoảng 6 tháng) cho đẹp và đủ dữ liệu
+  const start = today.subtract(23, "week").startOf("week");
+  const days: string[] = [];
+  let curr = start;
+  while (curr.isBefore(today) || curr.isSame(today, "day")) {
+    days.push(curr.format("YYYY-MM-DD"));
+    curr = curr.add(1, "day");
+  }
+
+  const dataMap = entries.reduce((acc, e) => {
+    const d = e.spent_on;
+    if (d) acc[d] = (acc[d] || 0) + (e.hours || 0);
+    return acc;
+  }, {} as Record<string, number>);
+
+  const getDayColor = (dateStr: string) => {
+    const hours = dataMap[dateStr] || 0;
+    const isWeekend = dayjs(dateStr).day() === 0 || dayjs(dateStr).day() === 6;
+    if (hours === 0) return isWeekend ? "transparent" : (themeMode === "dark" ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)");
+    if (hours >= 8) return STATUS_COLORS.success;
+    if (hours > 0) return STATUS_COLORS.warning;
+    return "transparent";
+  };
+
+  return (
+    <div style={{ padding: "10px 0" }}>
+      <div style={{ 
+        display: "grid", 
+        gridTemplateColumns: "repeat(24, 12px)", 
+        gridTemplateRows: "repeat(7, 12px)", 
+        gridAutoFlow: "column", 
+        gap: "4px", 
+        overflowX: "auto", 
+        paddingBottom: "12px",
+        paddingTop: "4px"
+      }}>
+        {days.map(d => (
+          <Tooltip key={d} title={`${dayjs(d).format("DD/MM")}: ${dataMap[d]?.toFixed(1) || 0}h`}>
+            <div style={{ 
+              width: "12px", 
+              height: "12px", 
+              borderRadius: "2px", 
+              background: getDayColor(d), 
+              border: `1px solid ${themeMode === "dark" ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)"}` 
+            }} />
+          </Tooltip>
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-secondary)", maxWidth: "380px" }}>
+        <span>{start.format("MMM YYYY")}</span>
+        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          <span>0h</span>
+          <div style={{ width: "10px", height: "10px", borderRadius: "2px", background: themeMode === "dark" ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)", border: "1px solid var(--glass-border)" }} />
+          <div style={{ width: "10px", height: "10px", borderRadius: "2px", background: STATUS_COLORS.warning }} />
+          <div style={{ width: "10px", height: "10px", borderRadius: "2px", background: STATUS_COLORS.success }} />
+          <span>≥ 8h</span>
+        </div>
+        <span>{today.format("MMM YYYY")}</span>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   // Giao diện: Chế độ sáng/tối và Tab hiển thị
   const [themeMode, setThemeMode] = useState<"dark" | "light">("dark");
-  const [viewMode, setViewMode] = useState<"daily" | "weekly">("daily");
 
   // Dữ liệu cho chế độ Ngày (Daily)
   const [selectedDate, setSelectedDate] = useState(dayjs().format("YYYY-MM-DD"));
@@ -208,13 +348,22 @@ export default function App() {
   const [isSyncingRedmine, setIsSyncingRedmine] = useState(false);
   
   // Cấu hình API Key & Redmine
-  const [customApiKey, setCustomApiKey] = useState("");
+  const [aiSettings, setAiSettings] = useState<AiSettings>(loadAiSettings);
+  const aiConfig = resolveAiConfig(aiSettings);
   const [redmineServer, setRedmineServer] = useState("");
+  // Chỉ chứa khoá MỚI người dùng gõ vào; khoá đã lưu không bao giờ được gửi về giao diện
   const [redmineApiKey, setRedmineApiKey] = useState("");
+  const [redmineKeyHint, setRedmineKeyHint] = useState("");
   const [redmineDefaultProject, setRedmineDefaultProject] = useState("");
+  const [redmineLoaded, setRedmineLoaded] = useState(false);
+  // Cài đặt đã lưu (khác bản đang sửa trong trang Cài đặt) — dùng để biết còn thiếu bước thiết lập nào
+  const [savedAiSettings, setSavedAiSettings] = useState<AiSettings>(loadAiSettings);
+  const [savedRedmine, setSavedRedmine] = useState({ server: "", apiKey: "" });
 
-  // Active module: "daily" | "weekly" | "dashboard" | "settings" | "spent_time"
-  const [activeModule, setActiveModule] = useState<"daily" | "weekly" | "dashboard" | "settings" | "spent_time">("daily");
+  // Active module: "daily" | "weekly" | "dashboard" | "settings" | "spent_time" | "team"
+  const [activeModule, setActiveModule] = useState<"daily" | "weekly" | "dashboard" | "settings" | "spent_time" | "team">("spent_time");
+  const [isNarrowScreen, setIsNarrowScreen] = useState(false);
+  const [isSiderCollapsed, setIsSiderCollapsed] = useState(false);
 
   // Redmine Tickets Dashboard states
   const [userRedmineTickets, setUserRedmineTickets] = useState<any[]>([]);
@@ -223,9 +372,9 @@ export default function App() {
   // Spent Time states
   const [spentTimeEntries, setSpentTimeEntries] = useState<any[]>([]);
   const [isLoadingSpentTime, setIsLoadingSpentTime] = useState(false);
-  const [spentTimeFilter, setSpentTimeFilter] = useState<"all" | "this_month" | "last_month">("all");
+  const [spentTimeFilter, setSpentTimeFilter] = useState<"all" | "this_month" | "last_month">("this_month");
   const [spentTimePage, setSpentTimePage] = useState(1);
-  const [spentTimePageSize, setSpentTimePageSize] = useState(10);
+  const [spentTimePageSize, setSpentTimePageSize] = useState(12);
 
   // Trạng thái cho Modal Xác thực Ánh xạ Đơn lẻ
   const [isMappingModalOpen, setIsMappingModalOpen] = useState(false);
@@ -255,6 +404,57 @@ export default function App() {
   const [dashboardSearch, setDashboardSearch] = useState("");
   const [dashboardStatusFilter, setDashboardStatusFilter] = useState("all");
   const [dashboardPriorityFilter, setDashboardPriorityFilter] = useState("all");
+
+  // ---- TÍNH NĂNG MỚI ----
+
+  // 1. Pomodoro Timer
+  const [pomodoroVisible, setPomodoroVisible] = useState(false);
+  const [pomodoroMinimized, setPomodoroMinimized] = useState(false);
+  const [pomodoroSeconds, setPomodoroSeconds] = useState(25 * 60);
+  const [pomodoroRunning, setPomodoroRunning] = useState(false);
+  const [pomodoroMode, setPomodoroMode] = useState<"work" | "break">("work");
+  const [pomodoroTask, setPomodoroTask] = useState("");
+  const [pomodoroSessions, setPomodoroSessions] = useState(0);
+  const [showPomodoroLogModal, setShowPomodoroLogModal] = useState(false);
+  const [lastFinishedTask, setLastFinishedTask] = useState("");
+  const pomodoroIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // 2. Recurring Tasks - lưu danh sách tên task lặp lại
+  const [recurringTemplates, setRecurringTemplates] = useState<Task[]>(() => {
+    try { return JSON.parse(localStorage.getItem("logtime_recurring_tasks") || "[]"); } catch { return []; }
+  });
+
+  // 3. Bulk Select (Daily view)
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
+  const [logConfirmEntries, setLogConfirmEntries] = useState<LogEntryInput[] | null>(null);
+  const [activitySummaryDate, setActivitySummaryDate] = useState<string | null>(null);
+  // Tóm tắt hoạt động đã lưu theo ngày (undefined = chưa đọc từ localStorage)
+  const [daySummaries, setDaySummaries] = useState<Record<string, StoredDaySummary | null>>({});
+  const [redmineProjectList, setRedmineProjectList] = useState<any[]>([]);
+
+  // 4. Project Targets
+  const [projectTargets, setProjectTargets] = useState<Record<string, number>>(() => {
+    try { return JSON.parse(localStorage.getItem("logtime_project_targets") || "{}"); } catch { return {}; }
+  });
+  const [projectTargetInput, setProjectTargetInput] = useState<Record<string, number>>({});
+
+  // 5. AI Weekly Summary
+  const [weeklySummaryModalOpen, setWeeklySummaryModalOpen] = useState(false);
+  const [weeklySummaryText, setWeeklySummaryText] = useState("");
+  const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
+
+  // 6. Team View
+  const [teamTimeEntries, setTeamTimeEntries] = useState<any[]>([]);
+  const [isLoadingTeam, setIsLoadingTeam] = useState(false);
+  const [teamError, setTeamError] = useState<string | null>(null);
+  // 7. Browser Notification permission
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission>(
+    "Notification" in window ? Notification.permission : "denied"
+  );
+
+  // 8. Drag & Drop (weekly view)
+  const [dragTask, setDragTask] = useState<{ date: string; taskId: string } | null>(null);
+  const [dragOverDate, setDragOverDate] = useState<string | null>(null);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -287,11 +487,6 @@ export default function App() {
     const savedTasks = localStorage.getItem(`logtime_tasks_${selectedDate}`);
     const savedExplanation = localStorage.getItem(`logtime_explanation_${selectedDate}`);
     const savedChat = localStorage.getItem(`logtime_chat_${selectedDate}`);
-    const savedApiKey = localStorage.getItem("logtime_custom_apikey");
-
-    if (savedApiKey) {
-      setCustomApiKey(savedApiKey);
-    }
 
     if (savedTasks) {
       setTasks(JSON.parse(savedTasks));
@@ -311,7 +506,7 @@ export default function App() {
       setChatHistory([
         {
           role: "assistant",
-          content: "Xin chào! Mình là trợ lý AI phân bổ LogTime. Hãy thêm các task bạn đã làm hôm nay, đánh dấu độ quan trọng hoặc khóa những task có giờ cố định. Sau đó nhấn **Phân bổ thời gian bằng AI** để mình chia đủ 8 tiếng nhé!",
+          content: "Thêm các việc đã làm, khoá những việc có giờ cố định, rồi bấm “Phân bổ bằng AI” để chia đủ 8 giờ. Muốn chỉnh gì, cứ nhắn ở đây — ví dụ: “Họp 1 tiếng, còn lại dồn cho code”.",
         },
       ]);
     }
@@ -324,10 +519,12 @@ export default function App() {
       .then((data) => {
         if (data.success) {
           setRedmineServer(data.server || "");
-          setRedmineApiKey(data.apiKey || "");
+          setRedmineKeyHint(data.hasApiKey ? data.apiKeyHint : "");
+          setSavedRedmine({ server: data.server || "", apiKey: "" });
         }
       })
-      .catch((err) => console.error("Lỗi khi tải cấu hình Redmine:", err));
+      .catch((err) => console.error("Lỗi khi tải cấu hình Redmine:", err))
+      .finally(() => setRedmineLoaded(true));
 
     const savedDefaultProject = localStorage.getItem("logtime_redmine_default_project");
     if (savedDefaultProject) {
@@ -372,9 +569,36 @@ export default function App() {
       }
     } catch (err: any) {
       console.error("Lỗi khi tải danh sách thời gian:", err);
-      antdMessage.error("Không thể tải danh sách thời gian đã báo cáo");
+      antdMessage.error("Không tải được thời gian đã báo cáo. Kiểm tra URL và API key Redmine trong Cài đặt.");
     } finally {
       setIsLoadingSpentTime(false);
+    }
+  };
+
+  // Tải danh sách thời gian đã báo cáo (Spent Time) cho cả nhóm (Team View)
+  const handleFetchTeamSpentTime = async () => {
+    setIsLoadingTeam(true);
+    setTeamError(null);
+    try {
+      const res = await fetch("/api/redmine/time-entries?user_id=all&limit=300", {
+        method: "GET",
+        headers: { "Content-Type": "application/json" }
+      });
+      const data = await res.json();
+      if (data && data.success === false) {
+        setTeamError(data.error || "Không thể tải thông tin Team View từ Redmine.");
+        setTeamTimeEntries([]);
+      } else if (Array.isArray(data)) {
+        setTeamTimeEntries(data);
+      } else {
+        setTeamTimeEntries([]);
+      }
+    } catch (err: any) {
+      console.error("Lỗi khi tải thông tin Team View:", err);
+      setTeamError("Không thể tải thông tin Team View. Vui lòng kiểm tra quyền truy cập Redmine.");
+      setTeamTimeEntries([]);
+    } finally {
+      setIsLoadingTeam(false);
     }
   };
 
@@ -388,14 +612,106 @@ export default function App() {
   useEffect(() => {
     if (activeModule === "dashboard") {
       handleRefreshDashboardTickets();
+      if (spentTimeEntries.length === 0) handleFetchSpentTime();
     }
-  }, [activeModule, redmineServer, redmineApiKey]);
+  }, [activeModule, savedRedmine.server, redmineKeyHint]);
 
   useEffect(() => {
     if (activeModule === "spent_time") {
       handleFetchSpentTime();
     }
-  }, [activeModule, redmineServer, redmineApiKey]);
+  }, [activeModule, savedRedmine.server, redmineKeyHint]);
+
+  // Danh sách project Redmine (có parent) để dựng cây cho phần tóm tắt hoạt động
+  useEffect(() => {
+    if (activeModule !== "spent_time" || redmineProjectList.length > 0) return;
+    fetch("/api/redmine/projects")
+      .then((r) => r.json())
+      .then((list) => Array.isArray(list) && setRedmineProjectList(list))
+      .catch(() => undefined);
+  }, [activeModule, redmineProjectList.length]);
+
+  useEffect(() => {
+    if (activeModule === "team") {
+      handleFetchTeamSpentTime();
+    }
+  }, [activeModule, savedRedmine.server, redmineKeyHint]);
+
+
+  // Browser notification: nhắc cuối ngày nếu chưa đủ 8h logged
+  useEffect(() => {
+    if (notifPermission !== "granted") return;
+    const checkReminder = () => {
+      const now = new Date();
+      const vnHour = parseInt(new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Ho_Chi_Minh", hour: "numeric", hour12: false }).format(now));
+      if (vnHour < 16 || vnHour > 18) return;
+      const today = getVietnamToday();
+      const todayLogged = spentTimeEntries.filter(e => e.spent_on === today).reduce((s, e) => s + (e.hours || 0), 0);
+      if (todayLogged < 8) {
+        new Notification("⏰ Nhắc nhở LogTime", {
+          body: `Hôm nay bạn đã log ${todayLogged.toFixed(1)}h / 8.0h. Nhớ cập nhật trước khi hết giờ!`,
+          icon: "/logo.png",
+        });
+      }
+    };
+    const interval = setInterval(checkReminder, 30 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [notifPermission, spentTimeEntries]);
+
+  // Pomodoro timer countdown
+  useEffect(() => {
+    if (pomodoroRunning) {
+      pomodoroIntervalRef.current = setInterval(() => {
+        setPomodoroSeconds(s => {
+          if (s <= 1) {
+            clearInterval(pomodoroIntervalRef.current!);
+            setPomodoroRunning(false);
+            const nextMode = pomodoroMode === "work" ? "break" : "work";
+            const nextSeconds = nextMode === "work" ? 25 * 60 : 5 * 60;
+            setPomodoroMode(nextMode);
+            setPomodoroSeconds(nextSeconds);
+            antdMessage.success(pomodoroMode === "work" ? "🍅 Xong 1 Pomodoro! Nghỉ 5 phút nào!" : "💪 Hết giờ nghỉ! Bắt đầu làm việc!", 5);
+
+            if (pomodoroMode === "work") {
+              setLastFinishedTask(pomodoroTask);
+              setPomodoroSessions(prev => prev + 1);
+              setShowPomodoroLogModal(true);
+            }
+            if ("Notification" in window && Notification.permission === "granted") {              new Notification(pomodoroMode === "work" ? "🍅 Xong Pomodoro!" : "💪 Bắt đầu làm việc!", {
+                body: pomodoroMode === "work" ? `Hoàn thành: ${pomodoroTask || "Task"} - Nghỉ 5 phút!` : "Hết giờ nghỉ, tiếp tục nào!",
+              });
+            }
+            return nextSeconds;
+          }
+          return s - 1;
+        });
+      }, 1000);
+    } else {
+      if (pomodoroIntervalRef.current) clearInterval(pomodoroIntervalRef.current);
+    }
+    return () => { if (pomodoroIntervalRef.current) clearInterval(pomodoroIntervalRef.current); };
+  }, [pomodoroRunning, pomodoroMode]);
+
+  // Auto-add recurring tasks khi đổi tuần
+  useEffect(() => {
+    if (recurringTemplates.length === 0) return;
+    const days = getWeekDays(selectedDate);
+    const updates: Record<string, Task[]> = {};
+    days.forEach(day => {
+      const d = dayjs(day);
+      if (d.day() === 0 || d.day() === 6) return; // bỏ cuối tuần
+      const existing = JSON.parse(localStorage.getItem(`logtime_tasks_${day}`) || "[]") as Task[];
+      const toAdd = recurringTemplates.filter(rt => !existing.some(t => t.name === rt.name));
+      if (toAdd.length > 0) {
+        const newList = [...existing, ...toAdd.map(rt => ({ ...rt, id: Math.random().toString(36).substring(2, 9) }))];
+        localStorage.setItem(`logtime_tasks_${day}`, JSON.stringify(newList));
+        updates[day] = newList;
+      }
+    });
+    if (Object.keys(updates).length > 0) {
+      setWeeklyTasks(prev => ({ ...prev, ...updates }));
+    }
+  }, [selectedDate]);
 
   // Tải dữ liệu LogTime Tuần
   const loadWeeklyData = () => {
@@ -412,10 +728,10 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (viewMode === "weekly") {
+    if (activeModule === "weekly") {
       loadWeeklyData();
     }
-  }, [selectedDate, viewMode]);
+  }, [selectedDate, activeModule]);
 
   // Đồng bộ danh sách công việc hiện tại sang workspace file current_tasks.json
   useEffect(() => {
@@ -432,10 +748,10 @@ export default function App() {
   }, [selectedDate, tasks, weeklyTasks]);
 
   // Lưu trạng thái ngày
-  const saveDailyState = (updatedTasks: Task[], updatedExplanation: string, updatedChat: ChatMessage[]) => {
-    localStorage.setItem(`logtime_tasks_${selectedDate}`, JSON.stringify(updatedTasks));
-    localStorage.setItem(`logtime_explanation_${selectedDate}`, updatedExplanation);
-    localStorage.setItem(`logtime_chat_${selectedDate}`, JSON.stringify(updatedChat));
+  const saveDailyState = (updatedTasks: Task[], updatedExplanation: string, updatedChat: ChatMessage[], date = selectedDate) => {
+    localStorage.setItem(`logtime_tasks_${date}`, JSON.stringify(updatedTasks));
+    localStorage.setItem(`logtime_explanation_${date}`, updatedExplanation);
+    localStorage.setItem(`logtime_chat_${date}`, JSON.stringify(updatedChat));
   };
 
   const handleSetTasks = (newTasks: Task[]) => {
@@ -449,12 +765,11 @@ export default function App() {
   };
 
   const totalHours = calculateTotalHours(tasks);
-  const isEightHours = totalHours === 8.0;
 
   // Thêm task thủ công ngày
   const handleAddTask = () => {
     if (!inputName.trim()) {
-      antdMessage.warning("Vui lòng nhập tên công việc!");
+      antdMessage.warning("Nhập tên công việc trước khi thêm.");
       return;
     }
 
@@ -480,7 +795,6 @@ export default function App() {
     setInputIsLocked(false);
     setInputRedmineIssue(undefined);
     setInputRedmineProject("");
-    antdMessage.success("Đã thêm công việc thành công!");
   };
 
   // Nạp nhanh mẫu công việc ngày
@@ -490,14 +804,32 @@ export default function App() {
       id: Math.random().toString(36).substring(2, 9),
     }));
     handleSetTasks(newTasks);
-    antdMessage.success("Đã nạp danh sách công việc mẫu thành công!");
+  };
+
+  // Xoá là hành động dự kiến nên không hỏi lại, nhưng luôn cho hoàn tác
+  const showUndo = (label: string, undo: () => void) => {
+    const key = `undo-${Date.now()}`;
+    antdMessage.open({
+      key,
+      type: "info",
+      duration: 6,
+      content: (
+        <span>
+          {label}{" "}
+          <Button type="link" size="small" style={{ padding: "0 4px" }} onClick={() => { undo(); antdMessage.destroy(key); }}>
+            Hoàn tác
+          </Button>
+        </span>
+      ),
+    });
   };
 
   // Xóa task
   const handleDeleteTask = (id: string) => {
-    const newTasks = tasks.filter((t) => t.id !== id);
-    handleSetTasks(newTasks);
-    antdMessage.info("Đã xóa công việc.");
+    const previous = tasks;
+    const removed = tasks.find((t) => t.id === id);
+    handleSetTasks(tasks.filter((t) => t.id !== id));
+    showUndo(`Đã xoá "${removed?.name ?? "công việc"}".`, () => handleSetTasks(previous));
   };
 
   // Toggle trạng thái lock
@@ -526,13 +858,13 @@ export default function App() {
   // Gọi AI phân bổ ngày
   const handleAIDistribute = async () => {
     if (tasks.length === 0) {
-      antdMessage.warning("Vui lòng thêm ít nhất một công việc trước khi phân bổ!");
+      antdMessage.warning("Thêm ít nhất một công việc để AI phân bổ.");
       return;
     }
 
     setIsAnalyzing(true);
     try {
-      const response = await distributeTasksWithAI(tasks, customApiKey);
+      const response = await distributeTasksWithAI(tasks, aiConfig);
       
       const newChat: ChatMessage[] = [
         ...chatHistory,
@@ -546,19 +878,21 @@ export default function App() {
         },
       ];
 
+      const before = { tasks, explanation, chatHistory };
       setExplanation(response.explanation);
       setChatHistory(newChat);
       setTasks(response.tasks);
       saveDailyState(response.tasks, response.explanation, newChat);
 
-      if (calculateTotalHours(response.tasks) === 8.0) {
-        confetti({
-          particleCount: 100,
-          spread: 70,
-          origin: { y: 0.6 },
-        });
-        antdMessage.success("AI đã phân bổ đủ 8 tiếng một ngày tuyệt vời!");
-      }
+      showUndo(
+        calculateTotalHours(response.tasks) === 8.0 ? "Đã phân bổ đủ 8 giờ." : "Đã phân bổ lại thời gian.",
+        () => {
+          setTasks(before.tasks);
+          setExplanation(before.explanation);
+          setChatHistory(before.chatHistory);
+          saveDailyState(before.tasks, before.explanation, before.chatHistory);
+        }
+      );
     } catch (error: any) {
       antdMessage.error(error.message || "Đã xảy ra lỗi khi gọi AI.");
     } finally {
@@ -570,7 +904,7 @@ export default function App() {
   const handleSendChat = async () => {
     if (!chatInput.trim()) return;
     if (tasks.length === 0) {
-      antdMessage.warning("Danh sách công việc trống, vui lòng thêm công việc trước khi điều chỉnh!");
+      antdMessage.warning("Thêm công việc trước khi nhờ AI điều chỉnh.");
       return;
     }
 
@@ -589,7 +923,7 @@ export default function App() {
         tasks,
         userMsg,
         updatedHistory,
-        customApiKey
+        aiConfig
       );
 
       const nextHistory: ChatMessage[] = [
@@ -602,12 +936,7 @@ export default function App() {
       saveDailyState(response.tasks, explanation, nextHistory);
 
       if (calculateTotalHours(response.tasks) === 8.0) {
-        confetti({
-          particleCount: 50,
-          spread: 45,
-          colors: ["#5e5d59", "#b5c4b1", "#e9c46a"],
-        });
-        antdMessage.success("Đã điều chỉnh thành công và duy trì đủ 8.0 tiếng!");
+        antdMessage.success("Đã điều chỉnh, tổng vẫn đủ 8 giờ.");
       }
     } catch (error: any) {
       antdMessage.error(error.message || "Đã xảy ra lỗi khi điều chỉnh.");
@@ -619,43 +948,52 @@ export default function App() {
   // Phân tích văn bản thô (Ngày & Danh sách công việc)
   const handleParseRawTasks = async () => {
     if (!rawInputText.trim()) {
-      antdMessage.warning("Vui lòng nhập văn bản thô!");
+      antdMessage.warning("Dán danh sách công việc vào ô văn bản trước.");
       return;
     }
 
     setIsParsingRaw(true);
     try {
-      const response = await parseRawTasksWithAI(rawInputText, customApiKey);
-      
-      setSelectedDate(response.date);
+      const response = await parseRawTasksWithAI(rawInputText, aiConfig);
+      const targetDate = response.date;
+      const existing: Task[] =
+        targetDate === selectedDate ? tasks : JSON.parse(localStorage.getItem(`logtime_tasks_${targetDate}`) || "[]");
+      const prevChat: ChatMessage[] =
+        targetDate === selectedDate ? chatHistory : JSON.parse(localStorage.getItem(`logtime_chat_${targetDate}`) || "[]");
 
-      const newChat: ChatMessage[] = [
-        ...chatHistory,
-        {
-          role: "system",
-          content: `AI phân tích văn bản thô cho ngày ${response.date}`,
-        },
-        {
-          role: "assistant",
-          content: `Đã xử lý danh sách công việc cho ngày ${response.date}! ${response.explanation}`,
-        },
-      ];
+      const apply = () => {
+        const newChat: ChatMessage[] = [
+          ...prevChat,
+          { role: "system", content: `Đã nhập từ văn bản cho ngày ${dayjs(targetDate).format("DD/MM/YYYY")}` },
+          { role: "assistant", content: response.explanation },
+        ];
+        // Lưu theo đúng ngày AI nhận diện, rồi mới chuyển ngày để effect tải lại đúng dữ liệu
+        saveDailyState(response.tasks, response.explanation, newChat, targetDate);
+        if (targetDate === selectedDate) {
+          setTasks(response.tasks);
+          setExplanation(response.explanation);
+          setChatHistory(newChat);
+        } else {
+          setSelectedDate(targetDate);
+        }
+        setRawInputText("");
+        antdMessage.success(`Đã thêm ${response.tasks.length} công việc cho ngày ${dayjs(targetDate).format("DD/MM/YYYY")}.`);
+      };
 
-      setExplanation(response.explanation);
-      setChatHistory(newChat);
-      setTasks(response.tasks);
-      
-      saveDailyState(response.tasks, response.explanation, newChat);
-      setRawInputText("");
-
-      confetti({
-        particleCount: 120,
-        spread: 80,
-        origin: { y: 0.6 },
-      });
-      antdMessage.success(`Đã phân tích xong và chuyển sang ngày ${response.date}!`);
+      if (existing.length > 0) {
+        Modal.confirm({
+          title: `Thay thế ${existing.length} công việc của ngày ${dayjs(targetDate).format("DD/MM/YYYY")}?`,
+          content: "Ngày này đã có kế hoạch. Danh sách mới từ văn bản sẽ thay thế toàn bộ danh sách hiện tại.",
+          okText: "Thay thế",
+          okButtonProps: { danger: true },
+          cancelText: "Giữ nguyên",
+          onOk: apply,
+        });
+      } else {
+        apply();
+      }
     } catch (error: any) {
-      antdMessage.error(error.message || "Đã xảy ra lỗi khi phân tích văn bản thô.");
+      antdMessage.error(error.message || "Không phân tích được văn bản. Kiểm tra cài đặt AI rồi thử lại.");
     } finally {
       setIsParsingRaw(false);
     }
@@ -666,18 +1004,17 @@ export default function App() {
     const initialChat: ChatMessage[] = [
       {
         role: "assistant",
-        content: "Mình đã sẵn sàng trợ giúp điều chỉnh lại logtime cho bạn.",
+        content: "Nhắn yêu cầu để điều chỉnh thời gian, ví dụ: “Giảm review còn 1 giờ”.",
       },
     ];
     setChatHistory(initialChat);
     saveDailyState(tasks, explanation, initialChat);
-    antdMessage.info("Đã xóa lịch sử hội thoại.");
   };
 
   // Xuất file CSV ngày
   const handleExportCSV = () => {
     if (tasks.length === 0) {
-      antdMessage.warning("Không có dữ liệu để xuất!");
+      antdMessage.warning("Chưa có dữ liệu để xuất.");
       return;
     }
 
@@ -700,13 +1037,13 @@ export default function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    antdMessage.success("Đã tải xuống file CSV!");
+    antdMessage.success("Đã tải file CSV.");
   };
 
   // Copy báo cáo ngày
   const handleExportText = () => {
     if (tasks.length === 0) {
-      antdMessage.warning("Không có dữ liệu để xuất!");
+      antdMessage.warning("Chưa có dữ liệu để xuất.");
       return;
     }
 
@@ -721,12 +1058,13 @@ export default function App() {
     });
 
     navigator.clipboard.writeText(lines.join("\n"));
-    antdMessage.success("Đã sao chép báo cáo logtime vào clipboard!");
+    antdMessage.success("Đã sao chép báo cáo.");
   };
 
   // Lưu API Key & cấu hình Redmine
   const handleSaveApiKey = async () => {
-    localStorage.setItem("logtime_custom_apikey", customApiKey);
+    saveAiSettings(aiSettings);
+    setSavedAiSettings(aiSettings);
     localStorage.setItem("logtime_redmine_default_project", redmineDefaultProject);
     
     try {
@@ -740,100 +1078,250 @@ export default function App() {
       });
       const data = await res.json();
       if (data.success) {
-        antdMessage.success("Đã cập nhật cấu hình API Key & Redmine thành công!");
+        setSavedRedmine({ server: redmineServer, apiKey: "" });
+        setRedmineApiKey("");
+        setRedmineKeyHint(data.hasApiKey ? data.apiKeyHint : "");
+        antdMessage.success("Đã lưu cài đặt.");
       } else {
-        antdMessage.error("Không thể lưu cấu hình Redmine: " + data.error);
+        antdMessage.error("Không lưu được cài đặt Redmine: " + data.error);
       }
     } catch (e: any) {
-      antdMessage.error("Lỗi khi kết nối server: " + e.message);
+      antdMessage.error("Không kết nối được máy chủ ứng dụng: " + e.message);
     }
+  };
+
+  const isSettingsDirty =
+    JSON.stringify(aiSettings) !== JSON.stringify(savedAiSettings) ||
+    redmineServer !== savedRedmine.server ||
+    redmineApiKey !== savedRedmine.apiKey ||
+    redmineDefaultProject !== (localStorage.getItem("logtime_redmine_default_project") || "");
+
+  const revertSettings = () => {
+    setAiSettings(savedAiSettings);
+    setRedmineServer(savedRedmine.server);
+    setRedmineApiKey(savedRedmine.apiKey);
+    setRedmineDefaultProject(localStorage.getItem("logtime_redmine_default_project") || "");
+  };
+
+  // Rời trang Cài đặt khi còn thay đổi chưa lưu thì hỏi để tránh mất dữ liệu
+  const navigateTo = (key: typeof activeModule) => {
+    if (activeModule === "settings" && key !== "settings" && isSettingsDirty) {
+      Modal.confirm({
+        title: "Lưu thay đổi trong Cài đặt?",
+        content: "Nếu không lưu, các thay đổi vừa nhập sẽ bị bỏ.",
+        okText: "Lưu",
+        cancelText: "Bỏ thay đổi",
+        onOk: async () => {
+          await handleSaveApiKey();
+          setActiveModule(key);
+        },
+        onCancel: () => {
+          revertSettings();
+          setActiveModule(key);
+        },
+      });
+      return;
+    }
+    setActiveModule(key);
+  };
+
+  // Mọi lần log đều qua modal xác nhận dạng cây (Project › Task › Task con) trước khi gửi Redmine
+  const openLogConfirm = (entries: LogEntryInput[]) => {
+    if (entries.length === 0) {
+      antdMessage.warning("Chưa có công việc nào có số giờ lớn hơn 0 để log.");
+      return;
+    }
+    setLogConfirmEntries(entries);
+  };
+
+  // Ghi lại task Redmine đã chọn trong modal để lần sau không phải chọn lại
+  const handleTaskIssueChange = (date: string, taskId: string, issueId: number, projectName?: string) => {
+    const apply = (list: Task[]) =>
+      list.map((t) => (t.id === taskId ? { ...t, redmineIssue: issueId, redmineProject: projectName || t.redmineProject } : t));
+    const saved = localStorage.getItem(`logtime_tasks_${date}`);
+    if (saved) localStorage.setItem(`logtime_tasks_${date}`, JSON.stringify(apply(JSON.parse(saved) as Task[])));
+    setWeeklyTasks((prev) => (prev[date] ? { ...prev, [date]: apply(prev[date]) } : prev));
+    if (date === selectedDate) setTasks((prev) => apply(prev));
+  };
+
+  // Thêm task (từ tóm tắt hoạt động) vào kế hoạch của một ngày
+  const handleAddTasksToDate = (date: string, newTasks: Task[]) => {
+    const saved = localStorage.getItem(`logtime_tasks_${date}`);
+    const base = date === selectedDate ? tasks : saved ? (JSON.parse(saved) as Task[]) : weeklyTasks[date] || [];
+    const updated = [...base, ...newTasks];
+    localStorage.setItem(`logtime_tasks_${date}`, JSON.stringify(updated));
+    setWeeklyTasks((prev) => ({ ...prev, [date]: updated }));
+    if (date === selectedDate) setTasks(updated);
+  };
+
+  const getDaySummary = (date: string) => (date in daySummaries ? daySummaries[date] : loadDaySummary(date));
+
+  const handleDaySummaryChange = (date: string, summary: StoredDaySummary | null) => {
+    saveDaySummary(summary, date);
+    setDaySummaries((prev) => ({ ...prev, [date]: summary }));
+  };
+
+  // Tạo task từ các dòng tóm tắt trên thẻ ngày rồi đánh dấu đã tạo
+  const handleCreateSummaryRows = (date: string, rows: SummaryRow[]) => {
+    const summary = getDaySummary(date);
+    if (!summary) return;
+    handleAddTasksToDate(date, rows.map(summaryRowToTask));
+    const keys = new Set(rows.map((r) => r.key));
+    handleDaySummaryChange(date, { ...summary, rows: summary.rows.map((r) => (keys.has(r.key) ? { ...r, added: true } : r)) });
+    antdMessage.success(`Đã tạo ${rows.length} task trong kế hoạch ngày ${dayjs(date).format("DD/MM")}. Bấm log để chọn task Redmine.`);
+  };
+
+  const handleLogConfirmDone = () => {
+    setLogConfirmEntries(null);
+    setSelectedTaskIds(new Set());
+    celebrate({});
+    handleFetchSpentTime();
   };
 
   // Đồng bộ thời gian lên Redmine cho các task của ngày hiện tại
-  const handleSyncToRedmine = async () => {
-    // Check weekend (0 = Sunday, 6 = Saturday)
-    const dayOfWeek = dayjs(selectedDate).day();
-    if (dayOfWeek === 0 || dayOfWeek === 6) {
-      antdMessage.error("Không được phép log time vào Thứ Bảy và Chủ Nhật!");
-      return;
-    }
+  const handleSyncToRedmine = () => {
+    openLogConfirm(tasks.filter((t) => t.duration > 0).map((task) => ({ date: selectedDate, task })));
+  };
 
-    const syncableTasks = tasks.filter(
-      (t) => t.duration > 0 && (t.redmineIssue || t.redmineProject || redmineDefaultProject)
-    );
+  // ---- HANDLERS CHO CÁC TÍNH NĂNG MỚI ----
 
-    if (syncableTasks.length === 0) {
-      antdMessage.warning(
-        "Không có công việc hợp lệ để đồng bộ (công việc cần có số giờ > 0 và được gán mã Issue/Dự án)!"
-      );
-      return;
-    }
-
-    setIsSyncingRedmine(true);
-    let successCount = 0;
-    let failCount = 0;
-    const errors: string[] = [];
-
-    for (const task of syncableTasks) {
-      try {
-        const res = await fetch("/api/redmine/log", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            hours: task.duration,
-            comment: task.name,
-            date: selectedDate,
-            issue: task.redmineIssue,
-            project: task.redmineProject || redmineDefaultProject || undefined,
-          }),
-        });
-        const data = await res.json();
-        if (data.success) {
-          successCount++;
-        } else {
-          failCount++;
-          errors.push(`${task.name}: ${data.error}`);
-        }
-      } catch (err: any) {
-        failCount++;
-        errors.push(`${task.name}: ${err.message}`);
+  // Export CSV Spent Time
+  // Export CSV Spent Time
+  const handleExportSpentTimeCSV = () => {
+    const filtered = spentTimeEntries.filter((entry) => {
+      if (spentTimeFilter === "this_month") {
+        return entry.spent_on && dayjs(entry.spent_on).isSame(dayjs(), "month");
       }
+      if (spentTimeFilter === "last_month") {
+        return entry.spent_on && dayjs(entry.spent_on).isSame(dayjs().subtract(1, "month"), "month");
+      }
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      antdMessage.warning("Chưa có dữ liệu để xuất.");
+      return;
     }
 
-    setIsSyncingRedmine(false);
+    const header = "Ngày,Dự án,Mã Issue,Hoạt động,Số giờ,Ghi chú\n";
+    const rows = filtered.map(e => {
+      const date = e.spent_on || "";
+      const proj = (e.project?.name || "").replace(/"/g, '""');
+      const issue = e.issue?.id || "";
+      const act = (e.activity?.name || "").replace(/"/g, '""');
+      const hours = e.hours || 0;
+      const comment = (e.comments || "").replace(/"/g, '""');
+      return `${date},"${proj}","${issue}","${act}",${hours},"${comment}"`;
+    }).join("\n");
 
-    if (failCount === 0) {
-      antdMessage.success(`Đồng bộ thành công ${successCount} công việc lên Redmine!`);
-      confetti({
-        particleCount: 80,
-        spread: 60,
-        origin: { y: 0.7 },
-      });
-    } else {
-      Modal.error({
-        title: "Đồng bộ Redmine hoàn tất với lỗi",
-        content: (
-          <div>
-            <p>Đồng bộ thành công: {successCount} công việc.</p>
-            <p>Thất bại: {failCount} công việc.</p>
-            <div style={{ marginTop: "12px", maxHeight: "150px", overflowY: "auto", background: "rgba(0,0,0,0.05)", padding: "8px", borderRadius: "4px" }}>
-              {errors.map((err, i) => (
-                <div key={i} style={{ color: "red", fontSize: "12px", marginBottom: "4px" }}>{err}</div>
-              ))}
-            </div>
-          </div>
-        ),
-      });
+    const blob = new Blob(["\uFEFF" + header + rows], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `logtime_report_${spentTimeFilter}_${dayjs().format("YYYYMMDD")}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    antdMessage.success("Đã tải file CSV.");
+  };
+
+  // Bulk log time to Redmine
+  const handleBulkLogTime = () => {
+    openLogConfirm(tasks.filter((t) => selectedTaskIds.has(t.id)).map((task) => ({ date: selectedDate, task })));
+  };
+
+  // AI Weekly Summary
+  const handleGenerateWeeklySummary = async () => {
+    setIsGeneratingSummary(true);
+    setWeeklySummaryModalOpen(true);
+    setWeeklySummaryText("");
+    try {
+      const result = await generateWeeklySummaryWithAI(weeklyTasks, spentTimeEntries, aiConfig);
+      setWeeklySummaryText(result.summary);
+    } catch {
+      setWeeklySummaryText("Không thể tạo tóm tắt. Vui lòng thử lại.");
+    } finally {
+      setIsGeneratingSummary(false);
     }
   };
 
+
+  // Toggle recurring for a task
+  const handleToggleRecurring = (task: Task) => {
+    const isNowRecurring = !task.isRecurring;
+    const newTasks = tasks.map(t => t.id === task.id ? { ...t, isRecurring: isNowRecurring } : t);
+    handleSetTasks(newTasks);
+    // Cập nhật recurring templates
+    let newTemplates: Task[];
+    if (isNowRecurring) {
+      newTemplates = recurringTemplates.some(rt => rt.name === task.name)
+        ? recurringTemplates
+        : [...recurringTemplates, { ...task, isRecurring: true }];
+    } else {
+      newTemplates = recurringTemplates.filter(rt => rt.name !== task.name);
+    }
+    setRecurringTemplates(newTemplates);
+    localStorage.setItem("logtime_recurring_tasks", JSON.stringify(newTemplates));
+    antdMessage.success(isNowRecurring ? `"${task.name}" sẽ tự thêm vào các ngày làm việc mỗi tuần.` : `Đã tắt lặp lại cho "${task.name}".`);
+  };
+
+  // Request browser notification permission
+  const handleRequestNotification = async () => {
+    if (!("Notification" in window)) {
+      antdMessage.error("Trình duyệt này không hỗ trợ thông báo.");
+      return;
+    }
+    const perm = await Notification.requestPermission();
+    setNotifPermission(perm);
+    if (perm === "granted") antdMessage.success("Đã bật nhắc nhở cuối ngày.");
+    else antdMessage.warning("Thông báo đang bị chặn. Cho phép thông báo trong cài đặt trình duyệt rồi thử lại.");
+  };
+
+
+  // Drag & Drop handlers (weekly view)
+  const handleDragStart = (date: string, taskId: string) => setDragTask({ date, taskId });
+  const handleDragOver = (e: React.DragEvent, date: string) => { e.preventDefault(); setDragOverDate(date); };
+  const handleDrop = (e: React.DragEvent, targetDate: string) => {
+    e.preventDefault();
+    setDragOverDate(null);
+    if (!dragTask || dragTask.date === targetDate) { setDragTask(null); return; }
+    const sourceDay = dragTask.date;
+    const taskId = dragTask.taskId;
+    const task = (weeklyTasks[sourceDay] || []).find(t => t.id === taskId);
+    if (!task) { setDragTask(null); return; }
+    const newSource = (weeklyTasks[sourceDay] || []).filter(t => t.id !== taskId);
+    const newTarget = [...(weeklyTasks[targetDate] || []), task];
+    const updated = { ...weeklyTasks, [sourceDay]: newSource, [targetDate]: newTarget };
+    setWeeklyTasks(updated);
+    localStorage.setItem(`logtime_tasks_${sourceDay}`, JSON.stringify(newSource));
+    localStorage.setItem(`logtime_tasks_${targetDate}`, JSON.stringify(newTarget));
+    setDragTask(null);
+  };
+
   // --- LOGIC CHO PHẦN LOGTIME TUẦN (NHIỀU NGÀY) ---
+
+  const getTasksForDate = (date: string): Task[] => {
+    if (weeklyTasks[date] !== undefined && weeklyTasks[date].length > 0) {
+      return weeklyTasks[date];
+    }
+    const saved = localStorage.getItem(`logtime_tasks_${date}`);
+    return saved ? (JSON.parse(saved) as Task[]) : [];
+  };
+
+  const handleSyncSingleTaskToRedmine = (date: string, task: Task) => {
+    if (task.duration <= 0) {
+      antdMessage.warning("Đặt số giờ lớn hơn 0 trước khi log.");
+      return;
+    }
+    openLogConfirm([{ date, task }]);
+  };
 
   // Thêm nhanh công việc vào một ngày cụ thể trong tuần
   const handleAddQuickWeekTask = (date: string) => {
     const taskName = quickTaskNames[date] || "";
     if (!taskName.trim()) {
-      antdMessage.warning("Vui lòng nhập tên công việc!");
+      antdMessage.warning("Nhập tên công việc trước khi thêm.");
       return;
     }
 
@@ -847,7 +1335,8 @@ export default function App() {
       aiReason: "Thêm nhanh từ bảng tuần",
     };
 
-    const updatedTasks = [...(weeklyTasks[date] || []), newTask];
+    const existingTasks = getTasksForDate(date);
+    const updatedTasks = [...existingTasks, newTask];
     const newWeeklyTasks = { ...weeklyTasks, [date]: updatedTasks };
     
     setWeeklyTasks(newWeeklyTasks);
@@ -860,26 +1349,25 @@ export default function App() {
 
     // Reset input của ngày đó
     setQuickTaskNames({ ...quickTaskNames, [date]: "" });
-    antdMessage.success(`Đã thêm công việc vào ngày ${dayjs(date).format("DD/MM")}`);
   };
 
   // Xóa task nhanh ở bảng tuần
   const handleDeleteWeekTask = (date: string, taskId: string) => {
-    const updatedTasks = (weeklyTasks[date] || []).filter((t) => t.id !== taskId);
-    const newWeeklyTasks = { ...weeklyTasks, [date]: updatedTasks };
-
-    setWeeklyTasks(newWeeklyTasks);
-    localStorage.setItem(`logtime_tasks_${date}`, JSON.stringify(updatedTasks));
-
-    if (date === selectedDate) {
-      setTasks(updatedTasks);
-    }
-    antdMessage.info("Đã xóa công việc khỏi tuần.");
+    const existingTasks = getTasksForDate(date);
+    const removed = existingTasks.find((t) => t.id === taskId);
+    const writeDay = (list: Task[]) => {
+      setWeeklyTasks((prev) => ({ ...prev, [date]: list }));
+      localStorage.setItem(`logtime_tasks_${date}`, JSON.stringify(list));
+      if (date === selectedDate) setTasks(list);
+    };
+    writeDay(existingTasks.filter((t) => t.id !== taskId));
+    showUndo(`Đã xoá "${removed?.name ?? "công việc"}".`, () => writeDay(existingTasks));
   };
 
   // Toggle Lock nhanh ở bảng tuần
   const handleToggleWeekLock = (date: string, taskId: string, checked: boolean) => {
-    const updatedTasks = (weeklyTasks[date] || []).map((t) => {
+    const existingTasks = getTasksForDate(date);
+    const updatedTasks = existingTasks.map((t) => {
       if (t.id === taskId) {
         return { ...t, isLocked: checked };
       }
@@ -898,7 +1386,8 @@ export default function App() {
   // Cập nhật giờ nhanh ở bảng tuần
   const handleUpdateWeekDuration = (date: string, taskId: string, val: number | null) => {
     const duration = val === null ? 0 : val;
-    const updatedTasks = (weeklyTasks[date] || []).map((t) => {
+    const existingTasks = getTasksForDate(date);
+    const updatedTasks = existingTasks.map((t) => {
       if (t.id === taskId) {
         return { ...t, duration, isLocked: duration > 0 ? t.isLocked : false };
       }
@@ -927,13 +1416,13 @@ export default function App() {
     }
 
     if (!hasTasks) {
-      antdMessage.warning("Vui lòng thêm ít nhất một công việc vào bất kỳ ngày nào trong tuần!");
+      antdMessage.warning("Thêm ít nhất một công việc vào tuần này để AI phân bổ.");
       return;
     }
 
     setIsWeeklyAnalyzing(true);
     try {
-      const response = await distributeWeekTasksWithAI(weeklyTasks, customApiKey);
+      const response = await distributeWeekTasksWithAI(weeklyTasks, aiConfig);
 
       // Cập nhật state tuần và lưu trữ cục bộ cho từng ngày
       setWeeklyTasks(response.weeklyTasks);
@@ -954,12 +1443,7 @@ export default function App() {
         setExplanation(response.explanation);
       }
 
-      confetti({
-        particleCount: 150,
-        spread: 90,
-        origin: { y: 0.5 },
-      });
-      antdMessage.success("AI đã tự động phân bổ đủ 8.0 tiếng cho từng ngày trong tuần thành công!");
+      antdMessage.success("Đã phân bổ 8 giờ cho từng ngày trong tuần.");
     } catch (error: any) {
       antdMessage.error(error.message || "Không thể gọi AI phân bổ tuần.");
     } finally {
@@ -970,17 +1454,30 @@ export default function App() {
   // Chuyển sang xem/chỉnh sửa chi tiết một ngày
   const handleViewDayDetail = (date: string) => {
     setSelectedDate(date);
-    setViewMode("daily");
-    antdMessage.info(`Đã chuyển sang chế độ ngày chi tiết cho ngày ${dayjs(date).format("DD/MM/YYYY")}`);
+    setActiveModule("daily");
   };
 
   // Cột bảng của giao diện Ngày
   const columns = [
     {
-      title: "Tên công việc",
+      title: "Công việc",
       dataIndex: "name",
       key: "name",
-      render: (text: string) => <span style={{ fontWeight: 500 }}>{text}</span>,
+      render: (text: string, record: Task) => (
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 500 }}>
+            {text}
+            {record.isRecurring && (
+              <Tooltip title="Lặp lại mỗi tuần">
+                <ReloadOutlined style={{ marginLeft: 6, fontSize: 11, color: "var(--text-secondary)" }} />
+              </Tooltip>
+            )}
+          </div>
+          {record.aiReason && (
+            <Text type="secondary" style={{ fontSize: "12px" }}>{record.aiReason}</Text>
+          )}
+        </div>
+      ),
     },
     {
       title: "Độ ưu tiên",
@@ -1012,10 +1509,10 @@ export default function App() {
       ),
     },
     {
-      title: "Thời gian (giờ)",
+      title: "Số giờ",
       dataIndex: "duration",
       key: "duration",
-      width: 130,
+      width: 120,
       render: (val: number, record: Task) => (
         <InputNumber
           min={0}
@@ -1029,13 +1526,14 @@ export default function App() {
       ),
     },
     {
-      title: "Mã Issue Redmine",
+      title: "Issue",
       dataIndex: "redmineIssue",
       key: "redmineIssue",
-      width: 140,
+      width: 130,
       render: (val: number | undefined, record: Task) => (
         <InputNumber
-          placeholder="Issue ID"
+          placeholder="Chưa gắn"
+          prefix="#"
           value={val}
           onChange={(newVal) => {
             const newTasks = tasks.map((t) => {
@@ -1051,35 +1549,13 @@ export default function App() {
       ),
     },
     {
-      title: "Dự án Redmine",
-      dataIndex: "redmineProject",
-      key: "redmineProject",
-      width: 130,
-      render: (val: string | undefined, record: Task) => (
-        <Input
-          placeholder="Project ID/Key"
-          value={val || ""}
-          onChange={(e) => {
-            const newVal = e.target.value;
-            const newTasks = tasks.map((t) => {
-              if (t.id === record.id) {
-                return { ...t, redmineProject: newVal || undefined };
-              }
-              return t;
-            });
-            handleSetTasks(newTasks);
-          }}
-        />
-      ),
-    },
-    {
-      title: "Khóa giờ",
+      title: "Khoá giờ",
       dataIndex: "isLocked",
       key: "isLocked",
-      width: 100,
+      width: 90,
       align: "center" as const,
       render: (locked: boolean, record: Task) => (
-        <Tooltip title={locked ? "Mở khóa để AI tự động chia lại" : "Khóa giờ cố định"}>
+        <Tooltip title={locked ? "Đang khoá: AI giữ nguyên số giờ. Bấm để mở khoá." : "AI có thể chia lại số giờ. Bấm để khoá."}>
           <Switch
             checkedChildren={<LockOutlined />}
             unCheckedChildren={<UnlockOutlined />}
@@ -1090,35 +1566,36 @@ export default function App() {
       ),
     },
     {
-      title: "Chi tiết từ AI",
-      dataIndex: "aiReason",
-      key: "aiReason",
-      render: (text: string) => (
-        <Text type="secondary" italic style={{ fontSize: "13px" }}>
-          {text || "Chưa có phân tích"}
-        </Text>
-      ),
-    },
-    {
-      title: "Hành động",
+      title: "",
       key: "action",
-      width: 120,
-      align: "center" as const,
+      width: 96,
+      align: "right" as const,
       render: (_: any, record: Task) => (
-        <Space>
-          <Tooltip title="Ánh xạ Redmine (AI)">
+        <Space size={0}>
+          <Tooltip title={record.redmineIssue ? `Đổi issue (đang gắn #${record.redmineIssue})` : "Tìm issue phù hợp bằng AI"}>
             <Button
               type="text"
+              aria-label="Gắn issue Redmine"
               icon={<RobotOutlined style={{ color: record.redmineIssue ? "var(--success-color)" : "var(--text-secondary)" }} />}
               onClick={() => handleStartAiMapping(record)}
             />
           </Tooltip>
-          <Button
-            type="text"
-            danger
-            icon={<DeleteOutlined />}
-            onClick={() => handleDeleteTask(record.id)}
-          />
+          <Dropdown
+            trigger={["click"]}
+            menu={{
+              items: [
+                { key: "recurring", icon: <ReloadOutlined />, label: record.isRecurring ? "Tắt lặp lại mỗi tuần" : "Lặp lại mỗi tuần" },
+                { type: "divider" },
+                { key: "delete", icon: <DeleteOutlined />, label: "Xoá", danger: true },
+              ],
+              onClick: ({ key }) => {
+                if (key === "recurring") handleToggleRecurring(record);
+                if (key === "delete") handleDeleteTask(record.id);
+              },
+            }}
+          >
+            <Button type="text" aria-label="Thao tác khác" icon={<MoreOutlined />} />
+          </Dropdown>
         </Space>
       ),
     },
@@ -1127,7 +1604,7 @@ export default function App() {
   // Import ticket từ Redmine Dashboard vào Planner
   const handleImportTicket = (ticket: any) => {
     if (tasks.some((t) => t.redmineIssue === ticket.id)) {
-      antdMessage.warning("Công việc này đã có trong danh sách hôm nay!");
+      antdMessage.info("Ticket này đã có trong kế hoạch ngày.");
       return;
     }
     
@@ -1152,7 +1629,7 @@ export default function App() {
 
     const newTasks = [...tasks, newTask];
     handleSetTasks(newTasks);
-    antdMessage.success(`Đã nạp ticket #${ticket.id} vào danh sách hôm nay!`);
+    antdMessage.success(`Đã thêm #${ticket.id} vào kế hoạch ngày ${dayjs(selectedDate).format("DD/MM")}.`);
   };
 
   // Khởi chạy modal ánh xạ AI đơn lẻ
@@ -1182,7 +1659,7 @@ export default function App() {
         setUserRedmineTickets(candidates);
       }
 
-      const queryKeyword = await extractSearchQuery(task.name, customApiKey);
+      const queryKeyword = await extractSearchQuery(task.name, aiConfig);
       
       const searchRes = await fetch("/api/redmine/search", {
         method: "POST",
@@ -1198,7 +1675,7 @@ export default function App() {
         }
       });
 
-      const suggestion = await analyzeRedmineMapping(task.name, allCandidates, customApiKey);
+      const suggestion = await analyzeRedmineMapping(task.name, allCandidates, aiConfig);
       setAiSuggestion(suggestion);
       
       setManualMatchType(suggestion.type);
@@ -1302,7 +1779,7 @@ export default function App() {
   const handleStartBulkAiMapping = async () => {
     const unmappedTasks = tasks.filter((t) => !t.redmineIssue);
     if (unmappedTasks.length === 0) {
-      antdMessage.info("Tất cả công việc đã được gán mã Issue Redmine!");
+      antdMessage.info("Tất cả công việc đã gắn issue Redmine.");
       return;
     }
 
@@ -1325,7 +1802,7 @@ export default function App() {
       const suggestionsList: any[] = [];
 
       for (const task of unmappedTasks) {
-        const queryKeyword = await extractSearchQuery(task.name, customApiKey);
+        const queryKeyword = await extractSearchQuery(task.name, aiConfig);
         
         const searchRes = await fetch("/api/redmine/search", {
           method: "POST",
@@ -1341,7 +1818,7 @@ export default function App() {
           }
         });
 
-        const suggestion = await analyzeRedmineMapping(task.name, allCandidates, customApiKey);
+        const suggestion = await analyzeRedmineMapping(task.name, allCandidates, aiConfig);
         
         suggestionsList.push({
           task,
@@ -1441,6 +1918,8 @@ export default function App() {
           colorPrimary: themeMode === "dark" ? "#f0eee6" : "#5e5d59",
           colorTextLightSolid: themeMode === "dark" ? "#141413" : "#ffffff",
           colorBgBase: themeMode === "dark" ? "#141413" : "#faf9f5",
+          colorLink: themeMode === "dark" ? "#e8a383" : "#b0532f",
+          colorLinkHover: themeMode === "dark" ? "#f0bfa6" : "#8c3f22",
           borderRadius: 8,
         },
       }}
@@ -1452,106 +1931,196 @@ export default function App() {
           breakpoint="lg"
           collapsedWidth="0"
           trigger={null}
-          width={260}
+          width={280}
+          collapsed={isSiderCollapsed}
+          onBreakpoint={(broken) => {
+            setIsNarrowScreen(broken);
+            setIsSiderCollapsed(broken);
+          }}
           className="app-sider"
           style={{
-            background: themeMode === "dark" ? "#191918" : "#f0eee6",
+            background: "var(--header-bg)",
             borderRight: "1px solid var(--glass-border)",
             position: "fixed",
             height: "100vh",
             left: 0,
             top: 0,
             bottom: 0,
-            zIndex: 100,
+            zIndex: isNarrowScreen ? 1000 : 100,
+            boxShadow: isNarrowScreen ? "4px 0 24px rgba(0,0,0,0.25)" : "none"
           }}
         >
-          <div style={{ padding: "20px", display: "flex", alignItems: "center", gap: "10px", borderBottom: "1px solid var(--glass-border)", height: "70px" }}>
-            <RobotOutlined style={{ fontSize: "28px", color: "var(--primary-color)" }} />
-            <span style={{ fontSize: "18px", fontWeight: "bold", fontFamily: "Lora, serif", color: "var(--text-primary)" }}>LogTime AI</span>
+          <div style={{ padding: "24px", display: "flex", alignItems: "center", gap: "12px" }}>
+            <img src="/logo.png" alt="" width={40} height={40} style={{ display: "block" }} />
+            <div>
+              <div style={{ fontSize: "20px", fontWeight: 600, fontFamily: "Lora, serif", color: "var(--text-primary)", lineHeight: 1.2 }}>LogTime AI</div>
+              <div style={{ fontSize: "11px", color: "var(--text-secondary)", fontWeight: 500, letterSpacing: "0.5px" }}>TRỢ LÝ LOG TIME</div>
+            </div>
           </div>
           <Menu
             mode="inline"
             selectedKeys={[activeModule]}
-            onClick={({ key }) => setActiveModule(key as any)}
-            style={{ background: "transparent", borderRight: 0, marginTop: "16px" }}
+            onClick={({ key }) => {
+              navigateTo(key as typeof activeModule);
+              if (isNarrowScreen) setIsSiderCollapsed(true);
+            }}
+            style={{ background: "transparent", borderRight: 0, padding: "0 10px" }}
             items={[
-              { key: "daily", icon: <HistoryOutlined />, label: "LogTime Hàng Ngày" },
-              { key: "weekly", icon: <CalendarOutlined />, label: "Quản Lý Theo Tuần" },
-              { key: "dashboard", icon: <DashboardOutlined />, label: "Dashboard Redmine" },
-              { key: "spent_time", icon: <ClockCircleOutlined />, label: "Thời Gian Đã Báo Cáo" },
-              { key: "settings", icon: <SettingOutlined />, label: "Cấu hình" },
+              {
+                type: 'group',
+                label: <span className="sider-group-label">Log time</span>,
+                children: [
+                  { key: "spent_time", icon: <ClockCircleOutlined />, label: PAGE_META.spent_time.title },
+                  { key: "daily", icon: <ScheduleOutlined />, label: PAGE_META.daily.title },
+                  { key: "weekly", icon: <CalendarOutlined />, label: PAGE_META.weekly.title },
+                ]
+              },
+              {
+                type: 'group',
+                label: <span className="sider-group-label">Redmine</span>,
+                children: [
+                  { key: "dashboard", icon: <DashboardOutlined />, label: PAGE_META.dashboard.title },
+                  { key: "team", icon: <TeamOutlined />, label: PAGE_META.team.title },
+                ]
+              },
+              {
+                type: 'group',
+                label: <span className="sider-group-label">Ứng dụng</span>,
+                children: [
+                  { key: "settings", icon: <SettingOutlined />, label: PAGE_META.settings.title },
+                ]
+              },
             ]}
           />
         </Sider>
 
+        {isNarrowScreen && !isSiderCollapsed && (
+          <div className="sider-backdrop" onClick={() => setIsSiderCollapsed(true)} />
+        )}
+
         <Layout className="main-layout-wrapper" style={{ minHeight: "100vh" }}>
           {/* App Header */}
-          <Header className="app-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", height: "70px", padding: "0 24px" }}>
-            <div style={{ fontSize: "18px", fontWeight: 600, color: "var(--text-primary)" }}>
-              {activeModule === "daily" && `Daily Planner - ${dayjs(selectedDate).format("DD/MM/YYYY")}`}
-              {activeModule === "weekly" && `Weekly Overview (${mondayFormatted} - ${sundayFormatted})`}
-              {activeModule === "dashboard" && "Redmine Tickets Dashboard"}
-              {activeModule === "spent_time" && "Báo cáo Thời gian (Spent Time)"}
-              {activeModule === "settings" && "Advanced Settings"}
+          <Header className="app-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", height: "64px", padding: "0 24px", lineHeight: "normal" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
+              <Button
+                type="text"
+                className="mobile-nav-toggle"
+                icon={<MenuOutlined />}
+                onClick={() => setIsSiderCollapsed(!isSiderCollapsed)}
+                aria-label="Mở menu"
+              />
+              <div style={{ minWidth: 0 }}>
+                <div className="header-title">{PAGE_META[activeModule].title}</div>
+                <div className="header-subtitle">
+                  {activeModule === "daily" && formatVietnameseDate(selectedDate)}
+                  {activeModule === "weekly" && `${mondayFormatted} – ${sundayFormatted}`}
+                  {activeModule !== "daily" && activeModule !== "weekly" && PAGE_META[activeModule].subtitle}
+                </div>
+              </div>
             </div>
             
-            <Space size="large">
-              {/* Toggle Light/Dark Mode */}
-              <Tooltip title={themeMode === "dark" ? "Chuyển sang chế độ sáng" : "Chuyển sang chế độ tối"}>
-                <Switch
-                  checkedChildren={<MoonOutlined />}
-                  unCheckedChildren={<SunOutlined />}
-                  checked={themeMode === "dark"}
-                  onChange={handleToggleTheme}
-                  style={{ background: themeMode === "dark" ? "var(--primary-color)" : "rgba(0, 0, 0, 0.25)" }}
+            <Space size="small">
+              {/* Điều hướng ngày/tuần: lùi · hôm nay · tiến · chọn ngày */}
+              {(activeModule === "daily" || activeModule === "weekly") && (
+                <Space.Compact>
+                  <Tooltip title={activeModule === "weekly" ? "Tuần trước" : "Ngày trước"}>
+                    <Button
+                      icon={<LeftOutlined />}
+                      aria-label={activeModule === "weekly" ? "Tuần trước" : "Ngày trước"}
+                      onClick={() => setSelectedDate(dayjs(selectedDate).subtract(1, activeModule === "weekly" ? "week" : "day").format("YYYY-MM-DD"))}
+                    />
+                  </Tooltip>
+                  <Button
+                    disabled={activeModule === "weekly" ? getWeekDays(selectedDate).includes(dayjs().format("YYYY-MM-DD")) : selectedDate === dayjs().format("YYYY-MM-DD")}
+                    onClick={() => setSelectedDate(dayjs().format("YYYY-MM-DD"))}
+                  >
+                    {activeModule === "weekly" ? "Tuần này" : "Hôm nay"}
+                  </Button>
+                  <Tooltip title={activeModule === "weekly" ? "Tuần sau" : "Ngày sau"}>
+                    <Button
+                      icon={<RightOutlined />}
+                      aria-label={activeModule === "weekly" ? "Tuần sau" : "Ngày sau"}
+                      onClick={() => setSelectedDate(dayjs(selectedDate).add(1, activeModule === "weekly" ? "week" : "day").format("YYYY-MM-DD"))}
+                    />
+                  </Tooltip>
+                  <DatePicker
+                    value={dayjs(selectedDate)}
+                    onChange={(date) => setSelectedDate(date ? date.format("YYYY-MM-DD") : dayjs().format("YYYY-MM-DD"))}
+                    allowClear={false}
+                    format="DD/MM/YYYY"
+                    style={{ width: "130px" }}
+                  />
+                </Space.Compact>
+              )}
+
+              <Tooltip title={themeMode === "dark" ? "Giao diện sáng" : "Giao diện tối"}>
+                <Button
+                  type="text"
+                  icon={themeMode === "dark" ? <SunOutlined /> : <MoonOutlined />}
+                  aria-label={themeMode === "dark" ? "Chuyển sang giao diện sáng" : "Chuyển sang giao diện tối"}
+                  onClick={() => handleToggleTheme(themeMode !== "dark")}
                 />
               </Tooltip>
-
-              {/* Chọn Ngày - Chỉ hiển thị khi ở tab Planner/Dashboard/Weekly */}
-              {activeModule !== "settings" && activeModule !== "spent_time" && (
-                <DatePicker
-                  value={dayjs(selectedDate)}
-                  onChange={(date) => setSelectedDate(date ? date.format("YYYY-MM-DD") : dayjs().format("YYYY-MM-DD"))}
-                  allowClear={false}
-                  format="DD/MM/YYYY"
-                  style={{ width: "160px" }}
-                />
-              )}
             </Space>
           </Header>
 
           {/* Content Layout */}
           <Content className="app-content">
+            {activeModule !== "settings" && (() => {
+              const savedAi = resolveAiConfig(savedAiSettings);
+              const missing: string[] = [];
+              if (redmineLoaded && (!savedRedmine.server || !redmineKeyHint)) missing.push("kết nối Redmine");
+              if (PROVIDERS[savedAi.provider].needsKey ? !savedAi.apiKey : !savedAi.baseUrl) missing.push("API key AI");
+              if (missing.length === 0) return null;
+              return (
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 20 }}
+                  message={`Cần thiết lập ${missing.join(" và ")} để dùng đầy đủ tính năng`}
+                  description={missing.includes("kết nối Redmine")
+                    ? "Nhập URL và API key Redmine để xem thời gian đã log và log giờ trực tiếp."
+                    : "Nhập API key của nhà cung cấp AI để tự tách việc và phân bổ giờ."}
+                  action={<Button size="small" type="primary" onClick={() => setActiveModule("settings")}>Mở Cài đặt</Button>}
+                />
+              );
+            })()}
             
             {/* GIAO DIỆN XEM HÀNG NGÀY (DAILY VIEW) */}
-            {activeModule === "daily" && (
+            {activeModule === "daily" && (() => {
+              const dayStatus = getHoursStatus(totalHours);
+              const loggableCount = tasks.filter((t) => t.duration > 0).length;
+              const unmappedCount = tasks.filter((t) => !t.redmineIssue).length;
+              return (
               <Row gutter={[24, 24]}>
                 {/* Cột chính bên trái */}
                 <Col xs={24} lg={16}>
                   <Row gutter={[16, 16]} style={{ marginBottom: "20px" }}>
                     <Col xs={12} sm={8}>
                       <div className="glass-stat-card">
-                        <div className="label">Tổng thời gian logged</div>
-                        <div className="value" style={{ color: isEightHours ? "var(--success-color)" : "var(--warning-color)" }}>
+                        <div className="label">Tổng thời gian</div>
+                        <div className="value" style={{ color: dayStatus.color }}>
                           {totalHours} / 8.0 giờ
                         </div>
+                        <div className="hint">{tasks.length === 0 ? "Chưa có công việc" : dayStatus.label}</div>
                       </div>
                     </Col>
 
                     <Col xs={12} sm={8}>
                       <div className="glass-stat-card">
-                        <div className="label">Tổng số công việc</div>
-                        <div className="value">{tasks.length} tasks</div>
+                        <div className="label">Công việc</div>
+                        <div className="value">{tasks.length}</div>
+                        <div className="hint">{unmappedCount > 0 ? `${unmappedCount} việc chưa gắn issue` : tasks.length > 0 ? "Đã gắn issue đầy đủ" : "—"}</div>
                       </div>
                     </Col>
 
                     <Col xs={24} sm={8}>
                       <div className="glass-stat-card" style={{ display: "flex", flexDirection: "column", justifyContent: "center", height: "100%" }}>
-                        <div className="label" style={{ marginBottom: "8px" }}>Trạng thái tiến độ</div>
+                        <div className="label" style={{ marginBottom: "8px" }}>Tiến độ</div>
                         <Progress
                           percent={Math.min(100, (totalHours / 8) * 100)}
-                          status={isEightHours ? "success" : "active"}
-                          strokeColor={isEightHours ? "var(--success-color)" : "var(--warning-color)"}
+                          status={dayStatus.key === "ok" ? "success" : "normal"}
+                          strokeColor={dayStatus.color}
                           showInfo={false}
                           style={{ margin: 0 }}
                         />
@@ -1559,204 +2128,259 @@ export default function App() {
                     </Col>
                   </Row>
 
+                  {/* Nhập công việc: cách nhanh nhất (dán danh sách) đặt trước */}
+                  <Card
+                    className="glass-panel"
+                    styles={{ body: { padding: "8px 20px 20px" } }}
+                  >
+                    <Tabs
+                      defaultActiveKey={tasks.length === 0 ? "paste" : "single"}
+                      items={[
+                        {
+                          key: "paste",
+                          label: <span><ThunderboltOutlined /> Dán danh sách</span>,
+                          children: (
+                            <div>
+                              <Text type="secondary" style={{ fontSize: "13px", display: "block", marginBottom: "12px" }}>
+                                Dán ngày và các việc đã làm. AI sẽ nhận diện ngày, tách từng việc và chia đủ 8 giờ.
+                              </Text>
+                              <Input.TextArea
+                                autoSize={{ minRows: 4, maxRows: 10 }}
+                                placeholder={`Ví dụ:\nNgày 4/5/2026\n- Kiểm tra khảo sát ML\n- Ovaltine popup\n- Davipharm tin tức video`}
+                                value={rawInputText}
+                                onChange={(e) => setRawInputText(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") handleParseRawTasks();
+                                }}
+                                style={{ marginBottom: "12px" }}
+                              />
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                                <Text type="secondary" style={{ fontSize: "12px" }}>Ctrl/⌘ + Enter để gửi</Text>
+                                <Button
+                                  type="primary"
+                                  icon={<ThunderboltOutlined />}
+                                  onClick={handleParseRawTasks}
+                                  loading={isParsingRaw}
+                                  disabled={!rawInputText.trim()}
+                                >
+                                  Phân tích bằng AI
+                                </Button>
+                              </div>
+                            </div>
+                          ),
+                        },
+                        {
+                          key: "single",
+                          label: <span><PlusOutlined /> Thêm từng việc</span>,
+                          children: (
+                            <div>
+                              <Row gutter={[12, 12]} align="bottom">
+                                <Col xs={24} md={10}>
+                                  <div className="field-label">Tên công việc</div>
+                                  <Input
+                                    placeholder="Ví dụ: Họp standup, Code API đăng nhập…"
+                                    value={inputName}
+                                    onChange={(e) => setInputName(e.target.value)}
+                                    onPressEnter={handleAddTask}
+                                  />
+                                </Col>
+                                <Col xs={12} md={5}>
+                                  <div className="field-label">Số giờ</div>
+                                  <InputNumber
+                                    min={0}
+                                    max={8}
+                                    step={0.5}
+                                    value={inputDuration}
+                                    onChange={(val) => setInputDuration(val || 0)}
+                                    onPressEnter={handleAddTask}
+                                    style={{ width: "100%" }}
+                                    addonAfter="h"
+                                  />
+                                </Col>
+                                <Col xs={12} md={5}>
+                                  <div className="field-label">Issue Redmine</div>
+                                  <InputNumber
+                                    placeholder="Không bắt buộc"
+                                    value={inputRedmineIssue}
+                                    onChange={(val) => setInputRedmineIssue(val || undefined)}
+                                    onPressEnter={handleAddTask}
+                                    style={{ width: "100%" }}
+                                    prefix="#"
+                                  />
+                                </Col>
+                                <Col xs={24} md={4}>
+                                  <Button
+                                    type="primary"
+                                    icon={<PlusOutlined />}
+                                    onClick={handleAddTask}
+                                    disabled={!inputName.trim()}
+                                    style={{ width: "100%" }}
+                                  >
+                                    Thêm
+                                  </Button>
+                                </Col>
+                              </Row>
+                              <Row gutter={[12, 12]} style={{ marginTop: "12px" }}>
+                                <Col xs={12} md={6}>
+                                  <div className="field-label">Độ ưu tiên</div>
+                                  <Select value={inputImportance} onChange={setInputImportance} style={{ width: "100%" }}>
+                                    <Option value="high">Cao</Option>
+                                    <Option value="medium">Trung bình</Option>
+                                    <Option value="low">Thấp</Option>
+                                  </Select>
+                                </Col>
+                                <Col xs={12} md={6}>
+                                  <div className="field-label">Danh mục</div>
+                                  <Select value={inputCategory} onChange={setInputCategory} style={{ width: "100%" }}>
+                                    <Option value="Coding">Coding</Option>
+                                    <Option value="Meeting">Meeting</Option>
+                                    <Option value="Review">Review</Option>
+                                    <Option value="Research">Research</Option>
+                                    <Option value="Documentation">Docs</Option>
+                                    <Option value="Other">Khác</Option>
+                                  </Select>
+                                </Col>
+                                <Col xs={24} md={12}>
+                                  <div className="field-label">Dự án Redmine</div>
+                                  <Input
+                                    placeholder={redmineDefaultProject ? `Mặc định: ${redmineDefaultProject}` : "Không bắt buộc — giúp AI tìm đúng issue"}
+                                    value={inputRedmineProject}
+                                    onChange={(e) => setInputRedmineProject(e.target.value)}
+                                    onPressEnter={handleAddTask}
+                                  />
+                                </Col>
+                              </Row>
+                              <Text type="secondary" style={{ fontSize: "12px", display: "block", marginTop: "8px" }}>
+                                Nhập số giờ thì việc sẽ được khoá giờ; để 0 cho AI tự chia.
+                              </Text>
+                            </div>
+                          ),
+                        },
+                      ]}
+                    />
+                  </Card>
+
                   {/* Bảng công việc */}
                   <Card
                     className="glass-panel"
                     title={
-                      <Space style={{ display: "flex", justifyContent: "space-between", width: "100%", flexWrap: "wrap", gap: "12px" }}>
-                        <span style={{ fontSize: "18px", fontWeight: 600, color: "var(--text-primary)" }}>
-                          Danh sách công việc ngày {dayjs(selectedDate).format("DD/MM/YYYY")}
+                      <div className="panel-header">
+                        <span className="panel-title">
+                          <ScheduleOutlined /> Công việc ngày {dayjs(selectedDate).format("DD/MM/YYYY")}
                         </span>
-                        <Space flex-wrap="wrap">
-                          {tasks.length === 0 && (
-                            <Button type="dashed" icon={<HistoryOutlined />} onClick={handleQuickPopulate}>
-                              Nạp công việc mẫu
-                            </Button>
-                          )}
+                        <Space wrap>
                           <Button
-                            type="default"
-                            icon={<RobotOutlined />}
-                            onClick={handleStartBulkAiMapping}
-                            loading={isBulkMappingLoading}
-                            disabled={tasks.filter(t => !t.redmineIssue).length === 0}
-                          >
-                            Tự động ánh xạ toàn bộ (AI)
-                          </Button>
-                          <Button
-                            type="primary"
                             icon={<ThunderboltOutlined />}
                             onClick={handleAIDistribute}
                             loading={isAnalyzing}
-                            className={!isEightHours && tasks.length > 0 ? "glow-active" : ""}
+                            disabled={tasks.length === 0}
                           >
-                            Phân bổ thời gian bằng AI
+                            Phân bổ bằng AI
+                          </Button>
+                          <Tooltip title={loggableCount === 0 ? "Đặt số giờ cho ít nhất một việc để log" : undefined}>
+                            <Button
+                              type="primary"
+                              icon={<UploadOutlined />}
+                              onClick={handleSyncToRedmine}
+                              loading={isSyncingRedmine}
+                              disabled={loggableCount === 0}
+                            >
+                              Log lên Redmine
+                            </Button>
+                          </Tooltip>
+                          <Dropdown
+                            trigger={["click"]}
+                            menu={{
+                              items: [
+                                { key: "map", icon: <RobotOutlined />, label: "Gắn issue tự động (AI)", disabled: unmappedCount === 0 },
+                                { type: "divider" },
+                                { key: "copy", icon: <CopyOutlined />, label: "Sao chép báo cáo", disabled: tasks.length === 0 },
+                                { key: "csv", icon: <DownloadOutlined />, label: "Tải file CSV", disabled: tasks.length === 0 },
+                                ...(tasks.length === 0
+                                  ? [{ type: "divider" as const }, { key: "sample", icon: <HistoryOutlined />, label: "Dùng danh sách mẫu" }]
+                                  : []),
+                              ],
+                              onClick: ({ key }) => {
+                                if (key === "map") handleStartBulkAiMapping();
+                                if (key === "copy") handleExportText();
+                                if (key === "csv") handleExportCSV();
+                                if (key === "sample") handleQuickPopulate();
+                              },
+                            }}
+                          >
+                            <Button icon={<MoreOutlined />} aria-label="Thao tác khác" loading={isBulkMappingLoading} />
+                          </Dropdown>
+                        </Space>
+                      </div>
+                    }
+                    styles={{ body: { padding: 0 } }}
+                  >
+                    {explanation && (
+                      <div className="callout" style={{ margin: "16px 20px 0" }}>
+                        <div className="section-label"><BulbOutlined /> Nhận xét của AI</div>
+                        <Text style={{ fontSize: "13px" }}>{explanation}</Text>
+                      </div>
+                    )}
+
+                    {selectedTaskIds.size > 0 && (
+                      <div className="selection-bar" style={{ marginTop: explanation ? 16 : 0 }}>
+                        <span>Đã chọn <strong>{selectedTaskIds.size}</strong> việc</span>
+                        <Space>
+                          <Button size="small" onClick={() => setSelectedTaskIds(new Set())}>Bỏ chọn</Button>
+                          <Button size="small" type="primary" icon={<UploadOutlined />} onClick={handleBulkLogTime}>
+                            Log {selectedTaskIds.size} việc đã chọn
                           </Button>
                         </Space>
-                      </Space>
-                    }
-                    styles={{ header: { borderBottom: "1px solid var(--glass-border)", padding: "16px 24px" }, body: { padding: "12px 0 0 0" } }}
-                    style={{ marginBottom: "24px" }}
-                  >
+                      </div>
+                    )}
+
                     <Table
+                      rowSelection={{
+                        selectedRowKeys: Array.from(selectedTaskIds),
+                        onChange: (selectedRowKeys) => {
+                          setSelectedTaskIds(new Set(selectedRowKeys as string[]));
+                        },
+                      }}
                       dataSource={tasks}
                       columns={columns}
                       rowKey="id"
                       pagination={false}
-                      scroll={{ x: 1200 }}
+                      scroll={{ x: 860 }}
                       locale={{
                         emptyText: (
-                          <Empty
-                            image={Empty.PRESENTED_IMAGE_SIMPLE}
-                            description={
-                              <span style={{ color: "var(--text-secondary)" }}>
-                                Hôm nay chưa có công việc nào. Hãy nhập nhanh văn bản thô hoặc điền form ở dưới.
-                              </span>
-                            }
+                          <EmptyIllustration
+                            themeMode={themeMode}
+                            description="Chưa có công việc cho ngày này. Dán danh sách ở trên để AI tách việc, hoặc thêm từng việc."
                           />
                         ),
                       }}
                       rowClassName={(record) => (record.isLocked ? "task-locked-row" : "task-unlocked-row")}
                     />
                   </Card>
-
-                  {/* Form thêm mới Task */}
-                  <Card
-                    className="glass-panel"
-                    title={<span style={{ fontSize: "16px", fontWeight: 600, color: "var(--text-primary)" }}>Thêm công việc mới</span>}
-                    styles={{ header: { borderBottom: "1px solid var(--glass-border)", padding: "12px 24px" }, body: { padding: "20px" } }}
-                  >
-                    <Row gutter={[16, 16]}>
-                      <Col xs={24} md={12}>
-                        <div style={{ marginBottom: "6px", color: "var(--text-secondary)" }}>Tên công việc:</div>
-                        <Input
-                          placeholder="Ví dụ: Họp Standup, Code API..."
-                          value={inputName}
-                          onChange={(e) => setInputName(e.target.value)}
-                          onPressEnter={handleAddTask}
-                        />
-                      </Col>
-
-                      <Col xs={12} md={6}>
-                        <div style={{ marginBottom: "6px", color: "var(--text-secondary)" }}>Mã Issue Redmine:</div>
-                        <InputNumber
-                          placeholder="Ví dụ: 12345"
-                          value={inputRedmineIssue}
-                          onChange={(val) => setInputRedmineIssue(val || undefined)}
-                          style={{ width: "100%" }}
-                        />
-                      </Col>
-
-                      <Col xs={12} md={6}>
-                        <div style={{ marginBottom: "6px", color: "var(--text-secondary)" }}>Dự án Redmine:</div>
-                        <Input
-                          placeholder="ID dự án (nếu không có Issue)"
-                          value={inputRedmineProject}
-                          onChange={(e) => setInputRedmineProject(e.target.value)}
-                          onPressEnter={handleAddTask}
-                        />
-                      </Col>
-                    </Row>
-
-                    <Row gutter={[16, 16]} align="bottom" style={{ marginTop: "16px" }}>
-                      <Col xs={12} sm={6} md={6}>
-                        <div style={{ marginBottom: "6px", color: "var(--text-secondary)" }}>Độ ưu tiên:</div>
-                        <Select value={inputImportance} onChange={setInputImportance} style={{ width: "100%" }}>
-                          <Option value="high">Cao</Option>
-                          <Option value="medium">Trung bình</Option>
-                          <Option value="low">Thấp</Option>
-                        </Select>
-                      </Col>
-
-                      <Col xs={12} sm={6} md={6}>
-                        <div style={{ marginBottom: "6px", color: "var(--text-secondary)" }}>Danh mục:</div>
-                        <Select value={inputCategory} onChange={setInputCategory} style={{ width: "100%" }}>
-                          <Option value="Coding">Coding</Option>
-                          <Option value="Meeting">Meeting</Option>
-                          <Option value="Review">Review</Option>
-                          <Option value="Research">Research</Option>
-                          <Option value="Documentation">Docs</Option>
-                          <Option value="Other">Khác</Option>
-                        </Select>
-                      </Col>
-
-                      <Col xs={12} sm={6} md={6}>
-                        <div style={{ marginBottom: "6px", color: "var(--text-secondary)" }}>Số giờ sẵn:</div>
-                        <InputNumber
-                          min={0}
-                          max={8}
-                          step={0.5}
-                          value={inputDuration}
-                          onChange={(val) => setInputDuration(val || 0)}
-                          style={{ width: "100%" }}
-                        />
-                      </Col>
-
-                      <Col xs={12} sm={6} md={6}>
-                        <Button
-                          type="primary"
-                          icon={<PlusOutlined />}
-                          onClick={handleAddTask}
-                          style={{ width: "100%" }}
-                        >
-                          Thêm công việc
-                        </Button>
-                      </Col>
-                    </Row>
-                  </Card>
-
-                  {/* Truyền nhanh từ văn bản thô */}
-                  <Card
-                    className="glass-panel"
-                    title={<span style={{ fontSize: "16px", fontWeight: 600, color: "var(--text-primary)" }}>Truyền nhanh danh sách công việc thô</span>}
-                    styles={{ header: { borderBottom: "1px solid var(--glass-border)", padding: "12px 24px" }, body: { padding: "20px" } }}
-                    style={{ marginTop: "24px" }}
-                  >
-                    <div style={{ marginBottom: "12px" }}>
-                      <Text type="secondary" style={{ fontSize: "13px" }}>
-                        Nhập ngày và danh sách công việc bằng văn bản thô (AI sẽ tự nhận diện ngày, trích xuất task và phân bổ đủ 8.0 tiếng).
-                      </Text>
-                    </div>
-                    <Input.TextArea
-                      rows={6}
-                      placeholder={`Ví dụ:\nNgày 4 tháng 5 năm 2026\n- Kiểm tra khảo sát ML\n- Tắt khách vãng lai và mới ĐK minh Long\n- Ovaltine popup\n- Kiểm tra đổi qua disable nút\n- Davipharm tin tức video`}
-                      value={rawInputText}
-                      onChange={(e) => setRawInputText(e.target.value)}
-                      style={{ marginBottom: "16px" }}
-                    />
-                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                      <Button
-                        type="primary"
-                        icon={<ThunderboltOutlined />}
-                        onClick={handleParseRawTasks}
-                        loading={isParsingRaw}
-                      >
-                        Phân tích & Phân bổ bằng AI
-                      </Button>
-                    </div>
-                  </Card>
                 </Col>
 
-                {/* Cột phụ bên phải */}
+                {/* Cột phụ bên phải: trợ lý AI */}
                 <Col xs={24} lg={8}>
                   <Card
                     className="glass-panel"
                     title={
-                      <Space style={{ display: "flex", justifyContent: "space-between", width: "100%" }}>
-                        <span style={{ fontSize: "16px", fontWeight: 600, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
-                          <RobotOutlined style={{ color: "var(--primary-color)" }} />
-                          Trợ lý AI LogTime
+                      <div className="panel-header">
+                        <span className="panel-title">
+                          <RobotOutlined />
+                          Trợ lý AI
                         </span>
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<ClearOutlined />}
-                          onClick={handleClearChat}
-                          style={{ color: "var(--text-secondary)" }}
-                        />
-                      </Space>
+                        <Tooltip title="Xoá hội thoại">
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<ClearOutlined />}
+                            onClick={handleClearChat}
+                            aria-label="Xoá hội thoại"
+                          />
+                        </Tooltip>
+                      </div>
                     }
-                    styles={{ header: { borderBottom: "1px solid var(--glass-border)", padding: "14px 24px" }, body: { padding: "16px" } }}
-                    style={{ marginBottom: "24px" }}
+                    styles={{ body: { padding: "16px" } }}
                   >
                     <div className="chat-container">
                       <div className="chat-messages">
@@ -1768,92 +2392,35 @@ export default function App() {
                         {isChatting && (
                           <div className="chat-bubble assistant" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                             <Badge status="processing" color="var(--primary-color)" />
-                            <span>Đang xử lý phân bổ lại thời gian...</span>
+                            <span>Đang điều chỉnh…</span>
                           </div>
                         )}
                         <div ref={chatEndRef} />
                       </div>
-                      
+
                       <div style={{ display: "flex", gap: "8px" }}>
                         <Input
-                          placeholder="Yêu cầu AI điều chỉnh công việc..."
+                          placeholder={tasks.length === 0 ? "Thêm công việc trước khi nhờ AI điều chỉnh" : "Ví dụ: Họp 1 tiếng, còn lại cho code"}
                           value={chatInput}
                           onChange={(e) => setChatInput(e.target.value)}
                           onPressEnter={handleSendChat}
-                          disabled={isChatting}
+                          disabled={isChatting || tasks.length === 0}
                         />
                         <Button
                           type="primary"
                           icon={<SendOutlined />}
                           onClick={handleSendChat}
                           loading={isChatting}
+                          disabled={!chatInput.trim() || tasks.length === 0}
+                          aria-label="Gửi"
                         />
                       </div>
                     </div>
                   </Card>
-
-                  {/* Xuất báo cáo */}
-                  <Card
-                    className="glass-panel"
-                    title={<span style={{ fontSize: "15px", fontWeight: 600, color: "var(--text-primary)" }}>Báo cáo & Xuất dữ liệu</span>}
-                    styles={{ header: { borderBottom: "1px solid var(--glass-border)", padding: "12px 24px" }, body: { padding: "20px" } }}
-                  >
-                    <Space direction="vertical" style={{ width: "100%" }} size="middle">
-                      <Text type="secondary">
-                        Xuất hoặc sao chép logtime ngày để đồng bộ vào các hệ thống quản trị công việc.
-                      </Text>
-                      
-                      {explanation && (
-                        <div style={{ background: "var(--bubble-assistant-bg)", border: "1px solid var(--glass-border)", borderRadius: "8px", padding: "12px" }}>
-                          <div style={{ fontWeight: 600, fontSize: "13px", color: "var(--primary-color)", marginBottom: "4px" }}>Đánh giá ngày:</div>
-                          <Text style={{ fontSize: "13px" }}>{explanation}</Text>
-                        </div>
-                      )}
-
-                      <Row gutter={12}>
-                        <Col span={12}>
-                          <Button
-                            type="default"
-                            icon={<CopyOutlined />}
-                            onClick={handleExportText}
-                            style={{ width: "100%" }}
-                            disabled={tasks.length === 0}
-                          >
-                            Copy bảng log
-                          </Button>
-                        </Col>
-                        <Col span={12}>
-                          <Button
-                            type="default"
-                            icon={<DownloadOutlined />}
-                            onClick={handleExportCSV}
-                            style={{ width: "100%" }}
-                            disabled={tasks.length === 0}
-                          >
-                            Tải CSV
-                          </Button>
-                        </Col>
-                      </Row>
-
-                      <Row gutter={12} style={{ marginTop: "12px" }}>
-                        <Col span={24}>
-                          <Button
-                            type="primary"
-                            icon={<ThunderboltOutlined />}
-                            onClick={handleSyncToRedmine}
-                            style={{ width: "100%" }}
-                            loading={isSyncingRedmine}
-                            disabled={tasks.length === 0}
-                          >
-                            Đồng bộ Redmine
-                          </Button>
-                        </Col>
-                      </Row>
-                    </Space>
-                  </Card>
                 </Col>
               </Row>
-            )}
+              );
+            })()}
 
             {/* GIAO DIỆN XEM THEO TUẦN (WEEKLY VIEW) */}
             {activeModule === "weekly" && (
@@ -1861,175 +2428,149 @@ export default function App() {
                 <Card
                   className="glass-panel"
                   title={
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", flexWrap: "wrap", gap: "12px" }}>
+                    <div className="panel-header">
                       <div>
-                        <span style={{ fontSize: "18px", fontWeight: 600, color: "var(--text-primary)" }}>
-                          Lịch trình LogTime Tuần
+                        <span className="panel-title">
+                          <CalendarOutlined /> Tuần {mondayFormatted} – {sundayFormatted}
                         </span>
-                        <Text type="secondary" style={{ marginLeft: "12px", fontSize: "14px" }}>
-                          ({mondayFormatted} - {sundayFormatted})
-                        </Text>
+                        <span className="panel-subtitle">
+                          Kéo một việc sang ngày khác để chuyển ngày. Mở một ngày để chỉnh chi tiết.
+                        </span>
                       </div>
-                      {weeklyExplanation && (
-                        <div style={{ maxWidth: "60%", background: "var(--bubble-assistant-bg)", border: "1px solid var(--glass-border)", borderRadius: "8px", padding: "8px 16px" }}>
-                          <Text style={{ fontSize: "13px" }}>💡 <b>Nhận xét tuần:</b> {weeklyExplanation}</Text>
-                        </div>
-                      )}
                       <div>
-                        <Button
-                          type="primary"
-                          icon={<ThunderboltOutlined />}
-                          onClick={handleAIWeeklyDistribute}
-                          loading={isWeeklyAnalyzing}
-                        >
-                          AI Phân Bổ Cả Tuần (Độc lập 8h/ngày)
-                        </Button>
+                        <Space wrap>
+                          <Button
+                            type="default"
+                            icon={<RobotOutlined />}
+                            onClick={handleGenerateWeeklySummary}
+                            loading={isGeneratingSummary}
+                          >
+                            Viết tóm tắt tuần
+                          </Button>
+                          <Button
+                            type="primary"
+                            icon={<ThunderboltOutlined />}
+                            onClick={handleAIWeeklyDistribute}
+                            loading={isWeeklyAnalyzing}
+                          >
+                            Phân bổ cả tuần bằng AI
+                          </Button>
+                        </Space>
                       </div>
                     </div>
                   }
-                  styles={{ header: { borderBottom: "1px solid var(--glass-border)", padding: "16px 24px" } }}
-                  style={{ marginBottom: "24px" }}
                 >
+                  {weeklyExplanation && (
+                    <div className="callout" style={{ marginBottom: "16px" }}>
+                      <div className="section-label"><BulbOutlined /> Nhận xét tuần</div>
+                      <Text style={{ fontSize: "13px" }}>{weeklyExplanation}</Text>
+                    </div>
+                  )}
                   <Row gutter={[16, 16]}>
-                    {weekDays.map((day, idx) => {
+                    {weekDays.map((day) => {
                       const dayTasks = weeklyTasks[day] || [];
                       const dayHours = calculateTotalHours(dayTasks);
                       const isDayEightHours = dayHours === 8.0;
-                      const dayName = DAY_NAMES_VI[idx];
+                      const dayName = DAY_NAMES_VI[dayjs(day).day()];
                       const isToday = day === dayjs().format("YYYY-MM-DD");
 
                       return (
                         <Col xs={24} sm={12} md={8} lg={8} xl={6} key={day}>
                           <AntdCard
                             size="small"
+                            className={["day-card", isToday && "is-today", dragOverDate === day && "is-drop-target"].filter(Boolean).join(" ")}
+                            onDragOver={(e: any) => handleDragOver(e, day)}
+                            onDrop={(e: any) => handleDrop(e, day)}
                             title={
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                 <span style={{ fontWeight: 600, color: isToday ? "var(--primary-color)" : "inherit" }}>
-                                   {dayName} {isToday && <Badge status="processing" color="var(--primary-color)" />}
-                                 </span>
+                                <span style={{ fontWeight: 600, display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                                  {dayName}
+                                  {isToday && <Tag className="chip-tag">Hôm nay</Tag>}
+                                </span>
                                 <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
                                   {dayjs(day).format("DD/MM")}
                                 </span>
                               </div>
                             }
                             style={{
-                              background: isToday 
-                                ? "var(--primary-light)" 
-                                : (themeMode === "dark" ? "rgba(255, 255, 255, 0.01)" : "rgba(0, 0, 0, 0.01)"),
-                              borderColor: isToday ? "var(--primary-color)" : "var(--glass-border)",
-                              boxShadow: isToday ? "var(--glow-shadow-1)" : "none"
+                              height: "100%",
+                              background: "var(--card-bg)",
+                              border: "1px solid var(--glass-border)",
+                              transition: "border-color 0.2s"
                             }}
                             actions={[
                               <Button type="link" size="small" icon={<ArrowRightOutlined />} onClick={() => handleViewDayDetail(day)}>
-                                Chi tiết ngày
+                                Mở ngày
                               </Button>
                             ]}
                           >
                             {/* Thống kê giờ trong ngày */}
                             <div style={{ marginBottom: "12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                              <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Đã log:</span>
-                              <span style={{ fontWeight: "bold", color: isDayEightHours ? "var(--success-color)" : "var(--warning-color)" }}>
+                              <span style={{ fontWeight: "bold", color: getHoursStatus(dayHours).color }}>
                                 {dayHours} / 8.0h
                               </span>
+                              {dayTasks.length > 0 && (
+                                <span className={`status-pill ${getHoursStatus(dayHours).key}`}>{getHoursStatus(dayHours).label}</span>
+                              )}
                             </div>
                             <Progress
                               percent={Math.min(100, (dayHours / 8) * 100)}
-                              strokeColor={isDayEightHours ? "var(--success-color)" : "var(--warning-color)"}
+                              strokeColor={getHoursStatus(dayHours).color}
                               size="small"
+                              showInfo={false}
                               status={isDayEightHours ? "success" : "normal"}
                               style={{ marginBottom: "16px" }}
                             />
 
                             {/* Danh sách Task của ngày */}
-                            <div style={{ minHeight: "180px", maxHeight: "250px", overflowY: "auto", marginBottom: "16px" }}>
+                            <div className="day-card-list">
                               {dayTasks.length === 0 ? (
                                 <div style={{ textAlign: "center", padding: "30px 0" }}>
-                                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span style={{ fontSize: "12px" }}>Không có task</span>} />
+                                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span style={{ fontSize: "12px" }}>Chưa có việc — thêm ở ô bên dưới</span>} />
                                 </div>
                               ) : (
                                 <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                                   {dayTasks.map((t) => (
                                     <div
                                       key={t.id}
-                                      style={{
-                                        padding: "8px",
-                                        background: themeMode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
-                                        border: "1px solid var(--glass-border)",
-                                        borderRadius: "8px",
-                                        display: "flex",
-                                        flexDirection: "column",
-                                        gap: "4px"
-                                      }}
+                                      draggable
+                                      onDragStart={() => handleDragStart(day, t.id)}
+                                      onDragEnd={() => setDragOverDate(null)}
+                                      className="task-chip"
                                     >
                                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                                        <Text style={{ fontSize: "13px", fontWeight: 500, width: "70%" }} ellipsis={{ tooltip: t.name }}>
+                                        <Text style={{ fontSize: "13px", fontWeight: 500, flex: 1, minWidth: 0 }} ellipsis={{ tooltip: t.name }}>
                                           {t.name}
                                         </Text>
-                                        <Button
-                                          type="text"
-                                          size="small"
-                                          danger
-                                          icon={<DeleteOutlined style={{ fontSize: "11px" }} />}
-                                          onClick={() => handleDeleteWeekTask(day, t.id)}
-                                          style={{ height: "18px", width: "18px", padding: 0 }}
-                                        />
+                                        <Tooltip title="Xoá">
+                                          <Button
+                                            type="text"
+                                            size="small"
+                                            danger
+                                            aria-label="Xoá"
+                                            icon={<DeleteOutlined style={{ fontSize: "12px" }} />}
+                                            onClick={() => handleDeleteWeekTask(day, t.id)}
+                                            style={{ height: "22px", width: "22px", padding: 0 }}
+                                          />
+                                        </Tooltip>
                                       </div>
 
-                                      <div style={{ display: "flex", gap: "4px", alignItems: "center", marginTop: "2px", marginBottom: "2px" }}>
-                                        <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>Issue:</span>
-                                        <InputNumber
-                                          placeholder="ID"
-                                          size="small"
-                                          value={t.redmineIssue}
-                                          onChange={(val) => {
-                                            const updatedTasks = (weeklyTasks[day] || []).map((task) => {
-                                              if (task.id === t.id) {
-                                                return { ...task, redmineIssue: val === null ? undefined : val };
-                                              }
-                                              return task;
-                                            });
-                                            const newWeeklyTasks = { ...weeklyTasks, [day]: updatedTasks };
-                                            setWeeklyTasks(newWeeklyTasks);
-                                            localStorage.setItem(`logtime_tasks_${day}`, JSON.stringify(updatedTasks));
-                                            if (day === selectedDate) {
-                                              setTasks(updatedTasks);
-                                            }
-                                          }}
-                                          style={{ width: "65px", fontSize: "11px" }}
-                                        />
-                                        <Input
-                                          placeholder="Proj"
-                                          size="small"
-                                          value={t.redmineProject || ""}
-                                          onChange={(e) => {
-                                            const val = e.target.value;
-                                            const updatedTasks = (weeklyTasks[day] || []).map((task) => {
-                                              if (task.id === t.id) {
-                                                return { ...task, redmineProject: val || undefined };
-                                              }
-                                              return task;
-                                            });
-                                            const newWeeklyTasks = { ...weeklyTasks, [day]: updatedTasks };
-                                            setWeeklyTasks(newWeeklyTasks);
-                                            localStorage.setItem(`logtime_tasks_${day}`, JSON.stringify(updatedTasks));
-                                            if (day === selectedDate) {
-                                              setTasks(updatedTasks);
-                                            }
-                                          }}
-                                          style={{ flex: 1, fontSize: "11px", height: "24px" }}
-                                        />
-                                      </div>
+                                      <Text type="secondary" style={{ fontSize: "11px" }}>
+                                        {t.redmineIssue ? `#${t.redmineIssue}` : "Chưa gắn issue"}
+                                        {t.redmineProject ? ` · ${t.redmineProject}` : ""}
+                                      </Text>
 
                                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "4px" }}>
                                         <Space size={4}>
-                                          <Tooltip title={t.isLocked ? "Mở khóa giờ" : "Khóa giờ"}>
+                                          <Tooltip title={t.isLocked ? "Đang khoá giờ — bấm để mở" : "Khoá giờ để AI không chia lại"}>
                                             <Switch
                                               size="small"
                                               checked={t.isLocked}
+                                              checkedChildren={<LockOutlined />}
+                                              unCheckedChildren={<UnlockOutlined />}
                                               onChange={(checked) => handleToggleWeekLock(day, t.id, checked)}
                                             />
                                           </Tooltip>
-                                          {t.isLocked ? <LockOutlined style={{ fontSize: "11px", color: "#fbbf24" }} /> : null}
                                         </Space>
 
                                         <InputNumber
@@ -2039,7 +2580,7 @@ export default function App() {
                                           size="small"
                                           value={t.duration}
                                           onChange={(val) => handleUpdateWeekDuration(day, t.id, val)}
-                                          style={{ width: "65px" }}
+                                          style={{ width: "90px" }}
                                           addonAfter="h"
                                         />
                                       </div>
@@ -2104,78 +2645,194 @@ export default function App() {
                   <Col xs={12} sm={6}>
                     <div className="glass-stat-card">
                       <div className="label">Ưu tiên cao</div>
-                      <div className="value" style={{ color: "#fca5a5" }}>
+                      <div className="value" style={{ color: "var(--danger-color)" }}>
                         {userRedmineTickets.filter(t => ["high", "urgent", "immediate", "cao", "khẩn cấp"].includes(t.priority?.name?.toLowerCase())).length}
                       </div>
                     </div>
                   </Col>
                 </Row>
 
-                {/* Phân phối Trạng thái & Độ ưu tiên (Progress Bars) */}
+                {/* Heatmap & Project Targets Overview */}
                 <Row gutter={[24, 24]} style={{ marginBottom: "24px" }}>
-                  <Col xs={24} md={12}>
-                    <Card className="glass-panel" title={<span style={{ fontSize: "16px", fontWeight: 600 }}>Tỷ lệ Trạng thái công việc</span>}>
-                      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                        {Array.from(new Set(userRedmineTickets.map(t => t.status?.name).filter(Boolean))).map((statusName) => {
-                          const count = userRedmineTickets.filter(t => t.status?.name === statusName).length;
-                          const pct = userRedmineTickets.length > 0 ? Math.round((count / userRedmineTickets.length) * 100) : 0;
-                          return (
-                            <div key={statusName}>
-                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px", fontSize: "13px" }}>
-                                <span>{statusName}</span>
-                                <span style={{ fontWeight: 500 }}>{count} ({pct}%)</span>
-                              </div>
-                              <Progress percent={pct} showInfo={false} strokeColor="var(--primary-color)" />
-                            </div>
-                          );
-                        })}
-                        {userRedmineTickets.length === 0 && (
-                          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Không có dữ liệu trạng thái" />
-                        )}
-                      </div>
+                  <Col xs={24} lg={16}>
+                    <Card className="glass-panel" style={{ height: "100%" }} title={<span className="panel-title"><FireOutlined /> Tần suất log time (6 tháng gần nhất)</span>} styles={{ body: { padding: "16px 20px" } }}>
+                      <LogTimeHeatmap entries={spentTimeEntries} themeMode={themeMode} />
                     </Card>
                   </Col>
-                  <Col xs={24} md={12}>
-                    <Card className="glass-panel" title={<span style={{ fontSize: "16px", fontWeight: 600 }}>Tỷ lệ Mức độ Ưu tiên</span>}>
-                      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                        {Array.from(new Set(userRedmineTickets.map(t => t.priority?.name).filter(Boolean))).map((priorityName) => {
-                          const count = userRedmineTickets.filter(t => t.priority?.name === priorityName).length;
-                          const pct = userRedmineTickets.length > 0 ? Math.round((count / userRedmineTickets.length) * 100) : 0;
-                          let color = "var(--primary-color)";
-                          if (["high", "urgent", "immediate", "cao", "khẩn cấp"].includes(priorityName.toLowerCase())) {
-                            color = "#fca5a5";
-                          } else if (["normal", "trung bình"].includes(priorityName.toLowerCase())) {
-                            color = "var(--warning-color)";
-                          } else {
-                            color = "var(--success-color)";
-                          }
-                          return (
-                            <div key={priorityName}>
-                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px", fontSize: "13px" }}>
-                                <span>{priorityName}</span>
-                                <span style={{ fontWeight: 500 }}>{count} ({pct}%)</span>
+                  <Col xs={24} lg={8}>
+                    <Card 
+                      className="glass-panel" 
+                      style={{ height: "100%" }}
+                      title={<span className="panel-title"><AimOutlined /> Mục tiêu giờ dự án</span>}
+                      extra={<Button size="small" type="link" onClick={() => setActiveModule("settings")}>Cài đặt</Button>}
+                      styles={{ body: { padding: "16px 20px" } }}
+                    >
+                      <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                        {Object.keys(projectTargets).length === 0 ? (
+                          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span style={{ fontSize: "12px" }}>Chưa thiết lập mục tiêu</span>} />
+                        ) : (
+                          Object.entries(projectTargets).map(([proj, target]) => {
+                            const actual = spentTimeEntries
+                              .filter(e => e.spent_on && dayjs(e.spent_on).isSame(dayjs(), "month") && (e.project?.name === proj || e.project?.id?.toString() === proj))
+                              .reduce((s, e) => s + (e.hours || 0), 0);
+                            const percent = Math.min(100, (actual / (target as number)) * 100);
+                            return (
+                              <div key={proj}>
+                                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px", fontSize: "12px" }}>
+                                  <Text strong ellipsis style={{ maxWidth: "70%" }}>{proj}</Text>
+                                  <Text type="secondary">{actual.toFixed(1)} / {target}h</Text>
+                                </div>
+                                <Progress 
+                                  percent={percent} 
+                                  size="small" 
+                                  strokeColor={percent >= 100 ? "var(--success-color)" : (percent >= 50 ? "var(--primary-color)" : "var(--warning-color)")} 
+                                />
                               </div>
-                              <Progress percent={pct} showInfo={false} strokeColor={color} />
-                            </div>
-                          );
-                        })}
-                        {userRedmineTickets.length === 0 && (
-                          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Không có dữ liệu độ ưu tiên" />
+                            );
+                          })
                         )}
                       </div>
                     </Card>
                   </Col>
                 </Row>
 
+                {/* Charts Row */}
+                <Row gutter={[24, 24]} style={{ marginBottom: "24px" }}>
+                  {/* Pie Chart: Trạng thái */}
+                  <Col xs={24} md={8}>
+                    <Card className="glass-panel" style={{ height: "100%" }} title={<span className="panel-title"><PieChartOutlined /> Phân bố trạng thái</span>} styles={{ body: { padding: "12px 16px" } }}>
+                      {userRedmineTickets.length === 0 ? (
+                        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có dữ liệu" />
+                      ) : (() => {
+                        const statusData = Array.from(new Set(userRedmineTickets.map((t: any) => t.status?.name).filter(Boolean))).map((name, i) => ({
+                          name,
+                          value: userRedmineTickets.filter((t: any) => t.status?.name === name).length,
+                          fill: CHART_COLORS[i % CHART_COLORS.length],
+                        }));
+                        return (
+                          <ResponsiveContainer width="100%" height={220}>
+                            <PieChart>
+                              <Pie data={statusData} cx="50%" cy="45%" innerRadius={48} outerRadius={72} paddingAngle={2} dataKey="value" stroke="var(--card-bg)">
+                                {statusData.map((entry: any, index: number) => <Cell key={index} fill={entry.fill} />)}
+                              </Pie>
+                              <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, color: "var(--text-secondary)" }} />
+                              <RechartsTooltip formatter={(val: any, name: any) => [`${val} ticket`, name]} contentStyle={{ background: "var(--card-bg)", border: "1px solid var(--glass-border)", borderRadius: 8 }} cursor={{ fill: "var(--surface-muted)" }} />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        );
+                      })()}
+                    </Card>
+                  </Col>
+
+                  {/* Bar Chart: Độ ưu tiên */}
+                  <Col xs={24} md={8}>
+                    <Card className="glass-panel" style={{ height: "100%" }} title={<span className="panel-title"><BarChartOutlined /> Phân bố độ ưu tiên</span>} styles={{ body: { padding: "12px 16px" } }}>
+                      {userRedmineTickets.length === 0 ? (
+                        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có dữ liệu" />
+                      ) : (() => {
+                        const PRIORITY_COLORS: Record<string, string> = {
+                          high: STATUS_COLORS.danger, urgent: STATUS_COLORS.danger, immediate: STATUS_COLORS.danger, cao: STATUS_COLORS.danger, "khẩn cấp": STATUS_COLORS.danger,
+                          normal: STATUS_COLORS.warning, "trung bình": STATUS_COLORS.warning,
+                          low: STATUS_COLORS.success, thấp: STATUS_COLORS.success,
+                        };
+                        const priorityData = Array.from(new Set(userRedmineTickets.map((t: any) => t.priority?.name).filter(Boolean))).map((name: any) => ({
+                          name,
+                          tickets: userRedmineTickets.filter((t: any) => t.priority?.name === name).length,
+                          fill: PRIORITY_COLORS[name?.toLowerCase()] || CHART_COLORS[3],
+                        }));
+                        return (
+                          <ResponsiveContainer width="100%" height={220}>
+                            <BarChart data={priorityData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
+                              <XAxis dataKey="name" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} />
+                              <YAxis tick={{ fontSize: 11, fill: "var(--text-secondary)" }} allowDecimals={false} />
+                              <RechartsTooltip formatter={(val: any) => [`${val} ticket`, "Số lượng"]} contentStyle={{ background: "var(--card-bg)", border: "1px solid var(--glass-border)", borderRadius: 8 }} cursor={{ fill: "var(--surface-muted)" }} />
+                              <Bar dataKey="tickets" radius={[6, 6, 0, 0]}>
+                                {priorityData.map((entry: any, i: number) => <Cell key={i} fill={entry.fill} />)}
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        );
+                      })()}
+                    </Card>
+                  </Col>
+
+                  {/* Bar Chart: Ticket theo Dự án */}
+                  <Col xs={24} md={8}>
+                    <Card className="glass-panel" style={{ height: "100%" }} title={<span className="panel-title"><ProjectOutlined /> Ticket theo dự án (top 8)</span>} styles={{ body: { padding: "12px 16px" } }}>
+                      {userRedmineTickets.length === 0 ? (
+                        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có dữ liệu" />
+                      ) : (() => {
+                        const projectData = Array.from(new Set(userRedmineTickets.map((t: any) => t.project?.name).filter(Boolean))).map((name: any, i: number) => ({
+                          name: name.length > 12 ? name.substring(0, 12) + "…" : name,
+                          fullName: name,
+                          tickets: userRedmineTickets.filter((t: any) => t.project?.name === name).length,
+                          fill: CHART_COLORS[i % CHART_COLORS.length],
+                        })).sort((a, b) => b.tickets - a.tickets).slice(0, 8);
+                        return (
+                          <ResponsiveContainer width="100%" height={220}>
+                            <BarChart data={projectData} layout="vertical" margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
+                              <XAxis type="number" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} allowDecimals={false} />
+                              <YAxis dataKey="name" type="category" width={90} interval={0} tick={{ fontSize: 11, fill: "var(--text-secondary)" }} />
+                              <RechartsTooltip formatter={(val: any) => [`${val} ticket`, "Số lượng"]} labelFormatter={(_: any, payload: any) => payload?.[0]?.payload?.fullName || ""} contentStyle={{ background: "var(--card-bg)", border: "1px solid var(--glass-border)", borderRadius: 8 }} cursor={{ fill: "var(--surface-muted)" }} />
+                              <Bar dataKey="tickets" radius={[0, 6, 6, 0]}>
+                                {projectData.map((entry: any, i: number) => <Cell key={i} fill={entry.fill} />)}
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        );
+                      })()}
+                    </Card>
+                  </Col>
+                </Row>
+
+                {/* Spent Time Chart: hours theo ngày tháng này */}
+                {spentTimeEntries.length > 0 && (() => {
+                  const thisMonthEntries = spentTimeEntries.filter(e => e.spent_on && dayjs(e.spent_on).isSame(dayjs(), "month"));
+                  if (thisMonthEntries.length === 0) return null;
+                  // Group by date
+                  const dateMap: Record<string, number> = {};
+                  thisMonthEntries.forEach((e: any) => {
+                    const d = e.spent_on;
+                    dateMap[d] = (dateMap[d] || 0) + (e.hours || 0);
+                  });
+                  const chartData = Object.entries(dateMap)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([date, hours]) => ({
+                      date: dayjs(date).format("DD/MM"),
+                      hours: Math.round(hours * 10) / 10,
+                    }));
+                  return (
+                    <Card className="glass-panel" title={<span className="panel-title"><LineChartOutlined /> Xu hướng log time hàng ngày (tháng này)</span>} style={{ marginBottom: "24px" }} styles={{ body: { padding: "12px 16px" } }}>
+                      <ResponsiveContainer width="100%" height={200}>
+                        <AreaChart data={chartData} margin={{ top: 5, right: 20, left: -20, bottom: 5 }}>
+                          <defs>
+                            <linearGradient id="colorHours" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="var(--primary-color)" stopOpacity={0.4}/>
+                              <stop offset="95%" stopColor="var(--primary-color)" stopOpacity={0}/>
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" vertical={false} />
+                          <XAxis dataKey="date" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} />
+                          <YAxis tick={{ fontSize: 11, fill: "var(--text-secondary)" }} />
+                          <RechartsTooltip formatter={(val: any) => [`${val}h`, "Số giờ"]} contentStyle={{ background: "var(--card-bg)", border: "1px solid var(--glass-border)", borderRadius: 8 }} cursor={{ fill: "var(--surface-muted)" }} />
+                          <Area type="monotone" dataKey="hours" stroke="var(--primary-color)" strokeWidth={2} fillOpacity={1} fill="url(#colorHours)" />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </Card>
+                  );
+                })()}
+
                 {/* Tickets Table Panel */}
                 <Card
                   className="glass-panel"
                   title={
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
-                      <span style={{ fontSize: "18px", fontWeight: 600 }}>Danh sách Ticket trên Redmine của tôi</span>
+                    <div className="panel-header">
+                      <span className="panel-title"><DashboardOutlined /> Ticket Redmine của tôi</span>
                       <Button
-                        type="primary"
-                        icon={<ThunderboltOutlined />}
+                        type="default"
+                        icon={<ReloadOutlined />}
                         onClick={handleRefreshDashboardTickets}
                         loading={isLoadingDashboard}
                       >
@@ -2183,16 +2840,17 @@ export default function App() {
                       </Button>
                     </div>
                   }
-                  styles={{ body: { padding: "20px 0 0 0" } }}
+                  styles={{ body: { padding: "16px 0 0 0" } }}
                 >
                   {/* Search & Filters */}
-                  <div style={{ display: "flex", gap: "12px", marginBottom: "16px", padding: "0 24px", flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: "12px", marginBottom: "16px", padding: "0 20px", flexWrap: "wrap" }}>
                     <Input
                       placeholder="Tìm kiếm theo ID, chủ đề hoặc dự án..."
                       prefix={<SearchOutlined style={{ color: "var(--text-secondary)" }} />}
                       value={dashboardSearch}
                       onChange={(e) => setDashboardSearch(e.target.value)}
-                      style={{ width: "280px" }}
+                      allowClear
+                      style={{ width: "280px", maxWidth: "100%" }}
                     />
                     
                     <Select
@@ -2261,7 +2919,7 @@ export default function App() {
                           } else if (["resolved", "đã giải quyết", "feedback", "phản hồi"].includes(status?.toLowerCase())) {
                             color = "var(--success-color)";
                           }
-                          return <Tag color={color} style={{ borderRadius: "4px" }}>{status}</Tag>;
+                          return <Tag style={{ borderRadius: "4px", color, borderColor: color, background: "transparent" }}>{status}</Tag>;
                         }
                       },
                       {
@@ -2293,12 +2951,11 @@ export default function App() {
                         align: "center",
                         render: (_, ticket) => (
                           <Button
-                            type="primary"
                             size="small"
                             icon={<PlusCircleOutlined />}
                             onClick={() => handleImportTicket(ticket)}
                           >
-                            Nạp vào Planner
+                            Thêm vào kế hoạch
                           </Button>
                         )
                       }
@@ -2314,35 +2971,20 @@ export default function App() {
 
             {/* GIAO DIỆN SETTINGS */}
             {activeModule === "settings" && (
-              <div style={{ maxWidth: "600px", margin: "0 auto" }}>
+              <div style={{ maxWidth: "640px", margin: "0 auto" }}>
                 <Card
                   className="glass-panel"
-                  title={<span style={{ fontSize: "18px", fontWeight: 600 }}>Cấu hình hệ thống & Tích hợp Redmine</span>}
-                  extra={
-                    <Button type="primary" onClick={handleSaveApiKey}>
-                      Lưu cấu hình
-                    </Button>
-                  }
+                  title={<span className="panel-title"><RobotOutlined /> Trợ lý AI</span>}
                 >
                   <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-                    <div>
-                      <div style={{ marginBottom: "6px", fontWeight: 500 }}>API Key (Z.AI):</div>
-                      <Input.Password
-                        placeholder="Nhập API Key của bạn"
-                        value={customApiKey}
-                        onChange={(e) => setCustomApiKey(e.target.value)}
-                        iconRender={(visible) => (visible ? <EyeOutlined /> : <EyeInvisibleOutlined />)}
-                      />
-                      <Text type="secondary" style={{ fontSize: "12px", display: "block", marginTop: "4px" }}>
-                        Nếu để trống, hệ thống sẽ sử dụng API Key mặc định của bạn.
-                      </Text>
-                    </div>
+                    <AiSettingsPanel value={aiSettings} onChange={setAiSettings} />
 
-                    <div style={{ borderTop: "1px solid var(--glass-border)", paddingTop: "20px" }}>
-                      <div style={{ fontWeight: 600, marginBottom: "16px", fontSize: "14px", color: "var(--primary-color)" }}>Tích hợp Redmine CLI:</div>
-                      
+                    <div className="settings-section">
+                      <div className="settings-section-title">Redmine</div>
+                      <div className="settings-section-desc">Dùng để xem thời gian đã log và log giờ trực tiếp lên Redmine.</div>
+
                       <div style={{ marginBottom: "16px" }}>
-                        <div style={{ marginBottom: "6px", fontWeight: 500 }}>Redmine Server URL:</div>
+                        <div className="field-label">Redmine Server URL</div>
                         <Input
                           placeholder="Ví dụ: https://redmine.mycompany.com"
                           value={redmineServer}
@@ -2351,27 +2993,120 @@ export default function App() {
                       </div>
 
                       <div style={{ marginBottom: "16px" }}>
-                        <div style={{ marginBottom: "6px", fontWeight: 500 }}>Redmine API Key:</div>
+                        <div className="field-label">Redmine API Key</div>
                         <Input.Password
-                          placeholder="Nhập Redmine API Token"
+                          placeholder={redmineKeyHint ? `Đã lưu (${redmineKeyHint}) — nhập khoá mới để thay` : "Nhập Redmine API key"}
                           value={redmineApiKey}
                           onChange={(e) => setRedmineApiKey(e.target.value)}
-                          iconRender={(visible) => (visible ? <EyeOutlined /> : <EyeInvisibleOutlined />)}
+                          visibilityToggle={false}
+                          autoComplete="new-password"
                         />
+                        <span className="field-hint">
+                          Lấy ở Redmine › Tài khoản của tôi › API access key. Khoá chỉ lưu trên máy này và không hiển thị lại.
+                        </span>
                       </div>
 
                       <div>
-                        <div style={{ marginBottom: "6px", fontWeight: 500 }}>Project mặc định:</div>
+                        <div className="field-label">Dự án mặc định</div>
                         <Input
                           placeholder="Nhập ID/Key dự án mặc định (ví dụ: logtime-project)"
                           value={redmineDefaultProject}
                           onChange={(e) => setRedmineDefaultProject(e.target.value)}
                         />
                         <Text type="secondary" style={{ fontSize: "12px", display: "block", marginTop: "4px" }}>
-                          Dùng làm fallback nếu công việc không có mã Issue trên Redmine.
+                          Giúp AI tìm đúng issue khi công việc chưa gắn issue.
                         </Text>
                       </div>
                     </div>
+
+                    <div className="settings-section">
+                      <div className="settings-section-title">Nhắc nhở & mục tiêu</div>
+                      
+                      <div style={{ marginBottom: "16px" }}>
+                         <div className="field-label">Nhắc nhở cuối ngày</div>
+                         <Button 
+                           icon={<BellOutlined />} 
+                           onClick={handleRequestNotification}
+                           disabled={notifPermission === "granted"}
+                         >
+                           {notifPermission === "granted" ? "Đã bật nhắc nhở" : "Bật nhắc nhở"}
+                         </Button>
+                         <Text type="secondary" style={{ fontSize: "12px", display: "block", marginTop: "4px" }}>
+                           Nhắc trong khoảng 16:00–18:00 nếu hôm đó chưa log đủ 8 giờ.
+                         </Text>
+                      </div>
+
+                      <div style={{ marginBottom: "16px" }}>
+                        <div className="field-label">Mục tiêu giờ theo dự án</div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                          <Text type="secondary" style={{ fontSize: "12px" }}>Thiết lập số giờ mục tiêu mỗi tháng cho từng dự án để theo dõi tiến độ.</Text>
+                          
+                          {Object.entries(projectTargets).map(([p, t]) => (
+                            <div key={p} style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                              <Input value={p} readOnly style={{ width: "200px", maxWidth: "100%" }} />
+                              <InputNumber value={t as number} readOnly style={{ width: "100px" }} addonAfter="h" />
+                              <Button 
+                                type="text" 
+                                danger 
+                                icon={<DeleteOutlined />} 
+                                onClick={() => {
+                                  const next = { ...projectTargets };
+                                  delete next[p];
+                                  setProjectTargets(next);
+                                  localStorage.setItem("logtime_project_targets", JSON.stringify(next));
+                                  antdMessage.success(`Đã xóa mục tiêu dự án ${p}`);
+                                }} 
+                              />
+                            </div>
+                          ))}
+                          
+                          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", background: "var(--surface-subtle)", padding: "12px", borderRadius: "8px", border: "1px dashed var(--glass-border)" }}>
+                            <Input 
+                              placeholder="Tên hoặc ID dự án" 
+                              style={{ width: "200px", maxWidth: "100%" }} 
+                              value={projectTargetInput.newProj as any || ""}
+                              onChange={(e) => setProjectTargetInput({ ...projectTargetInput, newProj: e.target.value as any })}
+                            />
+                            <InputNumber 
+                              placeholder="Giờ" 
+                              style={{ width: "100px" }} 
+                              value={projectTargetInput.newHours as any || null}
+                              onChange={(val) => setProjectTargetInput({ ...projectTargetInput, newHours: val as any })}
+                              addonAfter="h"
+                            />
+                            <Button 
+                              type="primary" 
+                              icon={<PlusOutlined />} 
+                              onClick={() => {
+                                if (projectTargetInput.newProj && projectTargetInput.newHours) {
+                                  const next = { ...projectTargets, [projectTargetInput.newProj as any]: projectTargetInput.newHours };
+                                  setProjectTargets(next);
+                                  localStorage.setItem("logtime_project_targets", JSON.stringify(next));
+                                  setProjectTargetInput({});
+                                  antdMessage.success("Đã thêm mục tiêu dự án mới!");
+                                } else {
+                                  antdMessage.warning("Vui lòng nhập đầy đủ tên dự án và số giờ mục tiêu.");
+                                }
+                              }}
+                            >
+                              Thêm
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="settings-footer">
+                    {isSettingsDirty && <Text type="secondary" style={{ fontSize: 12 }}>Có thay đổi chưa lưu</Text>}
+                    <Button
+                      onClick={revertSettings}
+                      disabled={!isSettingsDirty}
+                    >
+                      Huỷ thay đổi
+                    </Button>
+                    <Button type="primary" onClick={handleSaveApiKey} disabled={!isSettingsDirty}>
+                      Lưu
+                    </Button>
                   </div>
                 </Card>
               </div>
@@ -2382,27 +3117,18 @@ export default function App() {
                 <Card
                   className="glass-panel"
                   title={
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", flexWrap: "wrap", gap: "12px" }}>
-                      <div>
-                        <span style={{ fontSize: "18px", fontWeight: 600, color: "var(--text-primary)" }}>
-                          Lịch sử ghi nhận công việc (Spent Time)
-                        </span>
-                        <Text type="secondary" style={{ marginLeft: "12px", fontSize: "14px" }}>
-                          Xem tất cả thời gian đã báo cáo lên Redmine (người dùng hiện tại)
-                        </Text>
-                      </div>
-                      <Space>
-                        <Select
+                    <div className="panel-header">
+                      <Space wrap>
+                        <Segmented
                           value={spentTimeFilter}
                           onChange={(val) => {
-                            setSpentTimeFilter(val);
-                            setSpentTimePage(1); // Reset page to 1
+                            setSpentTimeFilter(val as typeof spentTimeFilter);
+                            setSpentTimePage(1);
                           }}
-                          style={{ width: 150 }}
                           options={[
-                            { value: "all", label: "Tất cả thời gian" },
                             { value: "this_month", label: "Tháng này" },
                             { value: "last_month", label: "Tháng trước" },
+                            { value: "all", label: "Tất cả" },
                           ]}
                         />
                         {(() => {
@@ -2416,25 +3142,48 @@ export default function App() {
                             return true;
                           });
                           const totalHours = filtered.reduce((sum, entry) => sum + (entry.hours || 0), 0);
+                          const loggedDays = new Set(filtered.map((e) => e.spent_on));
+                          const today = getVietnamToday();
+                          const missingDays = generateDatesForFilter(spentTimeFilter, filtered).filter((d) => {
+                            const wd = dayjs(d).day();
+                            return wd !== 0 && wd !== 6 && d < today && !loggedDays.has(d);
+                          }).length;
                           return (
-                            <Tag color="default" style={{ fontSize: "14px", padding: "6px 12px", borderRadius: "6px", background: "var(--card-bg)", borderColor: "var(--glass-border)", color: "var(--text-primary)", fontWeight: 500 }}>
-                              Tổng cộng: <strong>{totalHours.toFixed(1)} giờ</strong>
-                            </Tag>
+                            <>
+                              <Text>Tổng <strong>{totalHours.toFixed(1)} giờ</strong></Text>
+                              {missingDays > 0 && !isLoadingSpentTime && (
+                                <span className="status-pill missing">{missingDays} ngày làm việc chưa log</span>
+                              )}
+                            </>
                           );
                         })()}
-                        <Button 
-                          type="default" 
-                          icon={<ClockCircleOutlined />} 
-                          onClick={handleFetchSpentTime}
-                          loading={isLoadingSpentTime}
-                          style={{ borderRadius: "6px", background: "var(--card-bg)", borderColor: "var(--glass-border)", color: "var(--text-primary)" }}
+                      </Space>
+                      <Space wrap>
+                        <Button
+                          type="primary"
+                          icon={<FundViewOutlined />}
+                          onClick={() => setActivitySummaryDate(dayjs().format("YYYY-MM-DD"))}
                         >
-                          Làm mới
+                          Tóm tắt hoạt động hôm nay
                         </Button>
+                        <Tooltip title="Tải lại từ Redmine">
+                          <Button
+                            icon={<ReloadOutlined />}
+                            onClick={handleFetchSpentTime}
+                            loading={isLoadingSpentTime}
+                            aria-label="Tải lại từ Redmine"
+                          />
+                        </Tooltip>
+                        <Tooltip title="Xuất CSV">
+                          <Button
+                            icon={<DownloadCSVOutlined />}
+                            onClick={handleExportSpentTimeCSV}
+                            aria-label="Xuất CSV"
+                          />
+                        </Tooltip>
                       </Space>
                     </div>
                   }
-                  styles={{ header: { borderBottom: "1px solid var(--glass-border)", padding: "16px 24px" } }}
                   style={{ marginBottom: "24px" }}
                 >
                   {isLoadingSpentTime ? (
@@ -2457,9 +3206,9 @@ export default function App() {
 
                     if (allDates.length === 0) {
                       return (
-                        <Card className="glass-panel" style={{ textAlign: "center", padding: "40px" }}>
-                          <Empty description="Không tìm thấy lịch sử báo cáo thời gian phù hợp với bộ lọc" />
-                        </Card>
+                        <div style={{ padding: "40px 0" }}>
+                          <EmptyIllustration themeMode={themeMode} description="Không có ngày nào trong khoảng thời gian này." />
+                        </div>
                       );
                     }
 
@@ -2488,68 +3237,27 @@ export default function App() {
                       <Row gutter={[16, 16]}>
                         {paginatedDates.map((date) => {
                           const entries = groupedSpentTime[date];
+                          const localTasks = getTasksForDate(date);
+                          const daySummary = dayjs(date).day() % 6 === 0 ? null : getDaySummary(date);
                           const totalDailyHours = entries.reduce((sum, e) => sum + (e.hours || 0), 0);
                           const dayOfWeek = dayjs(date).day(); // 0: Chủ Nhật, 6: Thứ Bảy
                           const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
 
-                          let cardStyle: React.CSSProperties = { 
-                            borderRadius: "12px", 
-                            border: "1px solid var(--glass-border)",
-                            transition: "all 0.3s",
-                            height: "100%"
-                          };
-                          let headerStyle: React.CSSProperties = { 
-                            borderBottom: "1px solid var(--glass-border)", 
-                            padding: "10px 16px" 
-                          };
-                          let titleColor = "var(--text-primary)";
-                          let tagStyle: React.CSSProperties = {
-                            background: "rgba(94, 93, 89, 0.1)", 
-                            color: "var(--primary-color)", 
-                            border: "none", 
-                            fontWeight: 600, 
-                            fontSize: "12px", 
-                            padding: "2px 8px", 
+                          const isToday = date === getVietnamToday();
+                          const isMissing = !isWeekend && totalDailyHours === 0 && date < getVietnamToday();
+                          const dayCardClass = ["glass-panel", "day-card", isWeekend && "is-weekend", isMissing && "is-missing"].filter(Boolean).join(" ");
+                          const titleColor = isWeekend ? "var(--text-secondary)" : isMissing ? "var(--danger-color)" : "var(--text-primary)";
+                          const tagStyle: React.CSSProperties = {
+                            background: isMissing ? "var(--danger-bg)" : "var(--surface-muted)",
+                            color: isMissing ? "var(--danger-color)" : isWeekend ? "var(--text-secondary)" : "var(--text-primary)",
+                            border: isMissing ? "1px solid var(--danger-border)" : "none",
+                            fontWeight: 600,
+                            fontSize: "12px",
+                            padding: "0 8px",
+                            margin: 0,
                             borderRadius: "10px"
                           };
-                          let tagText = `${totalDailyHours.toFixed(1)} giờ`;
-
-                          if (isWeekend) {
-                            cardStyle = {
-                              ...cardStyle,
-                              background: "rgba(94, 93, 89, 0.03)",
-                              opacity: 0.85
-                            };
-                            titleColor = "var(--text-secondary)";
-                            tagStyle = {
-                              ...tagStyle,
-                              background: "rgba(94, 93, 89, 0.08)",
-                              color: "var(--text-secondary)",
-                            };
-                            tagText = "Nghỉ";
-                          } else if (totalDailyHours === 0) {
-                            // Weekday not logged
-                            if (themeMode === "dark") {
-                              cardStyle = {
-                                ...cardStyle,
-                                border: "1px solid rgba(220, 38, 38, 0.4)",
-                                background: "rgba(220, 38, 38, 0.08)",
-                              };
-                              headerStyle = { ...headerStyle, borderBottom: "1px solid rgba(220, 38, 38, 0.25)" };
-                              titleColor = "#fca5a5";
-                              tagStyle = { ...tagStyle, background: "rgba(220, 38, 38, 0.2)", color: "#fca5a5" };
-                            } else {
-                              cardStyle = {
-                                ...cardStyle,
-                                border: "1px solid #feb2b2",
-                                background: "#fff5f5",
-                              };
-                              headerStyle = { ...headerStyle, borderBottom: "1px solid #fed7d7" };
-                              titleColor = "#991b1b";
-                              tagStyle = { ...tagStyle, background: "#fee2e2", color: "#c53030" };
-                            }
-                            tagText = "Chưa log";
-                          }
+                          const tagText = isWeekend ? "Nghỉ" : isMissing ? "Chưa log" : isToday && totalDailyHours === 0 ? "Hôm nay" : `${totalDailyHours.toFixed(1)} giờ`;
 
                           const isDayEightHours = totalDailyHours >= 8.0;
                           const progressPercent = isWeekend ? 0 : Math.min(100, (totalDailyHours / 8) * 100);
@@ -2562,21 +3270,32 @@ export default function App() {
                           return (
                             <Col xs={24} sm={12} md={8} lg={8} xl={6} key={date}>
                               <Card
-                                className="glass-panel"
+                                className={dayCardClass}
                                 size="small"
-                                style={cardStyle}
+                                style={{ height: "100%" }}
                                 title={
                                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
                                     <span style={{ fontWeight: 600, fontSize: "13px", color: titleColor }}>
                                       {formatVietnameseDate(date)}
                                     </span>
-                                    <Tag style={tagStyle}>
-                                      {tagText}
-                                    </Tag>
+                                    <Space size={4}>
+                                      {!isWeekend && (
+                                        <Tooltip title="Tóm tắt hoạt động (AI agent + thời gian dùng máy)">
+                                          <Button
+                                            type="text"
+                                            size="small"
+                                            icon={<FundViewOutlined />}
+                                            onClick={() => setActivitySummaryDate(date)}
+                                          />
+                                        </Tooltip>
+                                      )}
+                                      <Tag style={tagStyle}>
+                                        {tagText}
+                                      </Tag>
+                                    </Space>
                                   </div>
                                 }
-                                headStyle={headerStyle}
-                                bodyStyle={{ padding: "12px 16px" }}
+                                styles={{ header: { padding: "0 16px", minHeight: "44px", borderBottomColor: isMissing ? "var(--danger-border)" : undefined }, body: { padding: "12px 16px" } }}
                               >
                                 {/* Đã log: X / 8.0h */}
                                 <div style={{ marginBottom: "12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -2596,61 +3315,129 @@ export default function App() {
                                 />
 
                                 {/* Danh sách các log entry của ngày */}
-                                <div style={{ minHeight: "180px", maxHeight: "250px", overflowY: "auto", marginBottom: "16px" }}>
+                                <div className="day-card-list">
                                   {isWeekend ? (
                                     <div style={{ textAlign: "center", padding: "30px 0", color: "var(--text-secondary)", fontSize: "13px" }}>
                                       <ClockCircleOutlined style={{ marginRight: "6px" }} />
                                       Cuối tuần - Không yêu cầu log time
                                     </div>
-                                  ) : entries.length === 0 ? (
+                                  ) : (entries.length === 0 && localTasks.length === 0 && !daySummary) ? (
                                     <div style={{ textAlign: "center", padding: "30px 0" }}>
-                                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span style={{ fontSize: "12px" }}>Không có task</span>} />
+                                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span style={{ fontSize: "12px" }}>Chưa có gì — thêm nhanh ở ô bên dưới</span>} />
                                     </div>
                                   ) : (
-                                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                                      {entries.map((entry: any, index: number) => (
-                                        <div
-                                          key={entry.id || index}
-                                          style={{
-                                            padding: "8px",
-                                            background: themeMode === "dark" ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)",
-                                            border: "1px solid var(--glass-border)",
-                                            borderRadius: "8px",
-                                            display: "flex",
-                                            flexDirection: "column",
-                                            gap: "4px"
-                                          }}
-                                        >
-                                          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-                                            <Tag style={{ background: "rgba(0,0,0,0.05)", border: "none", color: "var(--text-secondary)", fontSize: "11px", fontWeight: 500, margin: 0 }}>
-                                              {entry.project?.name || "Không có Project"}
-                                            </Tag>
-                                            {entry.issue?.id && (
-                                              <a
-                                                href={`${redmineServer}/issues/${entry.issue.id}`}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                style={{ color: "var(--primary-color)", fontWeight: 600, fontSize: "12px" }}
-                                              >
-                                                #{entry.issue.id}
-                                              </a>
-                                            )}
-                                            {entry.activity?.name && (
-                                              <Tag style={{ background: "rgba(94,93,89,0.05)", border: "1px solid var(--glass-border)", color: "var(--text-secondary)", fontSize: "11px", margin: 0 }}>
-                                                {entry.activity.name}
-                                              </Tag>
-                                            )}
+                                    <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                                      {/* A) Redmine Entries */}
+                                      {entries.length > 0 && (
+                                        <div>
+                                          <div className="section-label" style={{ color: "var(--success-color)" }}>
+                                            <CheckCircleOutlined /> Đã log trên Redmine · {totalDailyHours.toFixed(1)}h
                                           </div>
-                                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
-                                            <div style={{ color: "var(--text-primary)", fontSize: "12px", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                              {entry.comments || <span style={{ color: "var(--text-secondary)", fontStyle: "italic" }}>(Không có ghi chú)</span>}
-                                            </div>
-                                            <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)", whiteSpace: "nowrap" }}>
-                                              {entry.hours}h
-                                            </span>
+                                          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                            {entries.map((entry: any, index: number) => (
+                                              <div key={entry.id || index} className="task-chip">
+                                                <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                                                  <Tag className="chip-tag">
+                                                    {entry.project?.name || "Không có Project"}
+                                                  </Tag>
+                                                  {entry.issue?.id && (
+                                                    <a
+                                                      href={`${redmineServer}/issues/${entry.issue.id}`}
+                                                      target="_blank"
+                                                      rel="noopener noreferrer"
+                                                      style={{ color: "var(--primary-color)", fontWeight: 600, fontSize: "12px" }}
+                                                    >
+                                                      #{entry.issue.id}
+                                                    </a>
+                                                  )}
+                                                  {entry.activity?.name && (
+                                                    <Tag className="chip-tag" style={{ background: "transparent", border: "1px solid var(--glass-border)" }}>
+                                                      {entry.activity.name}
+                                                    </Tag>
+                                                  )}
+                                                </div>
+                                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
+                                                  <div title={entry.comments || undefined} style={{ color: "var(--text-primary)", fontSize: "12px", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                                    {entry.comments || <span style={{ color: "var(--text-secondary)", fontStyle: "italic" }}>(Không có ghi chú)</span>}
+                                                  </div>
+                                                  <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)", whiteSpace: "nowrap" }}>
+                                                    {entry.hours}h
+                                                  </span>
+                                                </div>
+                                              </div>
+                                            ))}
                                           </div>
                                         </div>
-                                      ))}
+                                      )}
+
+                                      {/* B) Local Planned Tasks */}
+                                      {localTasks.length > 0 && (
+                                        <div>
+                                          <div className="section-label" style={{ color: "var(--warning-color)" }}>
+                                            <ScheduleOutlined /> Kế hoạch chưa log · {localTasks.reduce((s, t) => s + (t.duration || 0), 0).toFixed(1)}h
+                                          </div>
+                                          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                            {localTasks.map((t) => (
+                                              <div key={t.id} className="task-chip">
+                                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                                                  <Text style={{ fontSize: "12px", fontWeight: 500, flex: 1, minWidth: 0 }} ellipsis={{ tooltip: t.name }}>
+                                                    {t.name}
+                                                  </Text>
+                                                  <Space size={4}>
+                                                    <Tooltip title="Log lên Redmine">
+                                                      <Button
+                                                        type="text"
+                                                        size="small"
+                                                        aria-label="Log lên Redmine"
+                                                        icon={<UploadOutlined style={{ fontSize: "12px" }} />}
+                                                        onClick={() => handleSyncSingleTaskToRedmine(date, t)}
+                                                        style={{ height: "22px", width: "22px", padding: 0 }}
+                                                      />
+                                                    </Tooltip>
+                                                    <Tooltip title="Xóa task">
+                                                      <Button
+                                                        type="text"
+                                                        size="small"
+                                                        danger
+                                                        icon={<DeleteOutlined style={{ fontSize: "12px" }} />}
+                                                        onClick={() => handleDeleteWeekTask(date, t.id)}
+                                                        style={{ height: "22px", width: "22px", padding: 0 }}
+                                                      />
+                                                    </Tooltip>
+                                                  </Space>
+                                                </div>
+
+                                                <div style={{ display: "flex", gap: "8px", alignItems: "center", justifyContent: "space-between" }}>
+                                                  <Text type="secondary" style={{ fontSize: "11px" }}>
+                                                    {t.redmineIssue ? `#${t.redmineIssue}` : "Chưa gắn issue"}
+                                                  </Text>
+                                                  <InputNumber
+                                                    min={0}
+                                                    max={8}
+                                                    step={0.5}
+                                                    size="small"
+                                                    value={t.duration}
+                                                    onChange={(val) => handleUpdateWeekDuration(date, t.id, val)}
+                                                    style={{ width: "72px", fontSize: "11px" }}
+                                                    suffix="h"
+                                                  />
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      {/* C) Tóm tắt hoạt động chờ tạo task */}
+                                      {daySummary && (
+                                        <DaySummaryTree
+                                          summary={daySummary}
+                                          projects={redmineProjectList}
+                                          onCreateRows={(rows) => handleCreateSummaryRows(date, rows)}
+                                          onOpen={() => setActivitySummaryDate(date)}
+                                          onRemove={() => handleDaySummaryChange(date, null)}
+                                        />
+                                      )}
                                     </div>
                                   )}
                                 </div>
@@ -2693,7 +3480,7 @@ export default function App() {
                               }}
                               showSizeChanger
                               pageSizeOptions={["12", "24", "48"]}
-                              style={{ color: "var(--text-primary)" }}
+                              showTotal={(total) => `${total} ngày`}
                             />
                           </div>
                         </Col>
@@ -2704,10 +3491,181 @@ export default function App() {
               </div>
             )}
 
+            {activeModule === "team" && (
+              <div>
+                <Card
+                  className="glass-panel"
+                  title={
+                    <div className="panel-header">
+                      <div>
+                        <span className="panel-title">
+                          <TeamOutlined /> Thời gian làm việc của nhóm
+                        </span>
+                        <span className="panel-subtitle">
+                          Tổng hợp spent time của các thành viên trong dự án — tháng {dayjs().format("MM/YYYY")}
+                        </span>
+                      </div>
+                      <Button 
+                        type="default" 
+                        icon={<ReloadOutlined />} 
+                        onClick={handleFetchTeamSpentTime}
+                        loading={isLoadingTeam}
+                      >
+                        Làm mới
+                      </Button>
+                    </div>
+                  }
+                  style={{ marginBottom: "24px" }}
+                >
+                  {teamError ? (
+                    <Alert
+                      type="error"
+                      showIcon
+                      message="Không thể tải dữ liệu nhóm"
+                      description={
+                        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                          <span>{teamError}</span>
+                          <Text type="secondary" style={{ fontSize: "12px" }}>
+                            Tính năng này yêu cầu tài khoản của bạn có quyền xem time entries của người dùng khác trên Redmine.
+                          </Text>
+                        </div>
+                      }
+                    />
+                  ) : isLoadingTeam ? (
+                    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "300px" }}>
+                      <Spin size="large" tip="Đang tải dữ liệu nhóm..." />
+                    </div>
+                  ) : (() => {
+                    const thisMonthEntries = teamTimeEntries.filter(
+                      (e) => e.spent_on && dayjs(e.spent_on).isSame(dayjs(), "month")
+                    );
+
+                    if (thisMonthEntries.length === 0) {
+                      return (
+                        <Empty description="Không có dữ liệu ghi nhận thời gian của nhóm trong tháng này" />
+                      );
+                    }
+
+                    const userMap: Record<number, { name: string; hours: number; dates: Set<string>; lastDate: string }> = {};
+
+                    thisMonthEntries.forEach(entry => {
+                      const userId = entry.user?.id;
+                      const userName = entry.user?.name || `Thành viên #${userId}`;
+                      const hours = entry.hours || 0;
+                      const date = entry.spent_on;
+
+                      if (!userId) return;
+
+                      if (!userMap[userId]) {
+                        userMap[userId] = {
+                          name: userName,
+                          hours: 0,
+                          dates: new Set<string>(),
+                          lastDate: '',
+                        };
+                      }
+
+                      userMap[userId].hours += hours;
+                      if (date) {
+                        userMap[userId].dates.add(date);
+                        if (!userMap[userId].lastDate || date > userMap[userId].lastDate) {
+                          userMap[userId].lastDate = date;
+                        }
+                      }
+                    });
+
+                    const dataSource = Object.entries(userMap).map(([userId, info]) => {
+                      const totalHours = info.hours;
+                      const distinctDays = info.dates.size;
+                      const avg = distinctDays > 0 ? totalHours / distinctDays : 0;
+                      return {
+                        key: userId,
+                        userId: Number(userId),
+                        name: info.name,
+                        totalHoursThisMonth: Math.round(totalHours * 10) / 10,
+                        averageHoursPerDay: Math.round(avg * 10) / 10,
+                        lastSpentOn: info.lastDate ? dayjs(info.lastDate).format("DD/MM/YYYY") : "Chưa có",
+                      };
+                    }).sort((a, b) => b.totalHoursThisMonth - a.totalHoursThisMonth);
+
+                    const teamColumns = [
+                      {
+                        title: "Thành viên",
+                        dataIndex: "name",
+                        key: "name",
+                        render: (text: string) => (
+                          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                            <Avatar style={{ backgroundColor: "var(--surface-muted)", color: "var(--text-primary)", verticalAlign: "middle", fontSize: "12px", fontWeight: 600 }}>
+                              {(() => {
+                                const words = text.trim().split(/\s+/);
+                                return (words.length > 1 ? words[0][0] + words[words.length - 1][0] : text.substring(0, 2)).toUpperCase();
+                              })()}
+                            </Avatar>
+                            <Text strong style={{ color: "var(--text-primary)" }}>{text}</Text>
+                          </div>
+                        ),
+                      },
+                      {
+                        title: "Tổng giờ (Tháng này)",
+                        dataIndex: "totalHoursThisMonth",
+                        key: "totalHoursThisMonth",
+                        render: (hours: number) => {
+                          const maxHours = Math.max(...dataSource.map(d => d.totalHoursThisMonth));
+                          const percent = maxHours > 0 ? (hours / maxHours) * 100 : 0;
+                          return (
+                            <div style={{ minWidth: "120px" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                                <Text strong style={{ color: hours >= 80 ? "var(--success-color)" : "var(--text-primary)" }}>
+                                  {hours.toFixed(1)}h
+                                </Text>
+                              </div>
+                              <Progress 
+                                percent={percent} 
+                                size="small" 
+                                showInfo={false} 
+                                strokeColor={hours >= 80 ? "var(--success-color)" : "var(--primary-color)"}
+                                style={{ margin: 0 }}
+                              />
+                            </div>
+                          );
+                        },
+                      },
+                      {
+                        title: "Trung bình / Ngày",
+                        dataIndex: "averageHoursPerDay",
+                        key: "averageHoursPerDay",
+                        render: (hours: number) => (
+                          <Tag style={{ fontSize: "12px", padding: "2px 8px", borderRadius: "4px", background: "var(--surface-muted)", border: "none", fontWeight: 500, color: hours >= 7.5 ? "var(--success-color)" : (hours >= 5 ? "var(--warning-color)" : "var(--text-secondary)") }}>
+                            {hours.toFixed(1)}h/ngày
+                          </Tag>
+                        ),
+                      },
+                      {
+                        title: "Ngày log gần nhất",
+                        dataIndex: "lastSpentOn",
+                        key: "lastSpentOn",
+                        render: (text: string) => <Text style={{ color: "var(--text-primary)" }}>{text}</Text>,
+                      },
+                    ];
+
+                    return (
+                      <Table
+                        dataSource={dataSource}
+                        columns={teamColumns}
+                        pagination={false}
+                        rowKey="key"
+                        scroll={{ x: 640 }}
+                      />
+                    );
+                  })()}
+                </Card>
+              </div>
+            )}
+
           </Content>
 
-          <Footer style={{ textAlign: "center", color: "var(--text-secondary)", background: "transparent", borderTop: "1px solid var(--glass-border)", padding: "20px" }}>
-            AI LogTime Assistant ©2026 Created by Antigravity
+          <Footer style={{ textAlign: "center", color: "var(--text-secondary)", background: "transparent", borderTop: "1px solid var(--glass-border)", padding: "16px", fontSize: "12px" }}>
+            LogTime AI · Estuary Solutions
           </Footer>
         </Layout>
 
@@ -2716,7 +3674,7 @@ export default function App() {
           title={
             <span style={{ fontSize: "16px", fontWeight: 600, display: "flex", alignItems: "center", gap: "8px" }}>
               <RobotOutlined style={{ color: "var(--primary-color)" }} />
-              Duyệt thủ công ánh xạ Redmine
+              Gắn issue Redmine
             </span>
           }
           open={isMappingModalOpen}
@@ -2725,7 +3683,7 @@ export default function App() {
             setIsMappingModalOpen(false);
             setMappingTask(null);
           }}
-          okText="Xác nhận & Áp dụng"
+          okText={manualMatchType === "subtask" ? "Tạo task con & gắn" : manualMatchType === "none" ? "Bỏ gắn issue" : "Gắn issue"}
           cancelText="Hủy"
           width={800}
           confirmLoading={isSyncingRedmine}
@@ -2733,7 +3691,7 @@ export default function App() {
           {isAiLoading ? (
             <div style={{ padding: "40px 0", textAlign: "center" }}>
               <Badge status="processing" color="var(--primary-color)" />
-              <div style={{ marginTop: "12px", color: "var(--text-secondary)" }}>AI đang phân tích task và tìm kiếm issue phù hợp trên Redmine...</div>
+              <div style={{ marginTop: "12px", color: "var(--text-secondary)" }}>AI đang tìm issue phù hợp trên Redmine…</div>
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: "16px", margin: "16px 0" }}>
@@ -2878,7 +3836,7 @@ export default function App() {
                 <div style={{ maxHeight: "180px", overflowY: "auto", border: "1px solid var(--glass-border)", borderRadius: "6px", background: "rgba(0,0,0,0.01)" }}>
                   {searchIssuesResults.length === 0 ? (
                     <div style={{ padding: "20px", textAlign: "center", color: "var(--text-secondary)" }}>
-                      Không có kết quả tìm kiếm. Hãy gõ từ khóa và bấm Tìm.
+                      Gõ từ khoá rồi nhấn Enter để tìm issue.
                     </div>
                   ) : (
                     <div style={{ display: "flex", flexDirection: "column" }}>
@@ -2909,7 +3867,7 @@ export default function App() {
                                 antdMessage.success(`Đã chọn gán trực tiếp vào #${issue.id}`);
                               }}
                             >
-                              Gán trực tiếp
+                              Gắn vào issue này
                             </Button>
                             <Button 
                               size="small" 
@@ -2921,7 +3879,7 @@ export default function App() {
                                 antdMessage.success(`Đã chọn gán làm con của #${issue.id}`);
                               }}
                             >
-                              Gán làm cha
+                              Tạo task con
                             </Button>
                           </Space>
                         </div>
@@ -2934,12 +3892,81 @@ export default function App() {
           )}
         </Modal>
 
+        {/* Modal Gợi ý Log Time sau Pomodoro */}
+        <Modal
+          title={<span style={{ fontWeight: 600 }}>🍅 Hoàn thành phiên tập trung!</span>}
+          open={showPomodoroLogModal}
+          onOk={() => {
+            const newTask: Task = {
+              id: Math.random().toString(36).substring(2, 9),
+              name: lastFinishedTask || "Phiên tập trung Pomodoro",
+              importance: "medium",
+              category: "Coding",
+              duration: 0.5,
+              isLocked: true
+            };
+            handleAddTasksToDate(dayjs().format("YYYY-MM-DD"), [newTask]);
+            setShowPomodoroLogModal(false);
+            antdMessage.success("Đã thêm 0.5h vào kế hoạch hôm nay.");
+          }}
+          onCancel={() => setShowPomodoroLogModal(false)}
+          okText="Thêm 0.5h vào kế hoạch"
+          cancelText="Bỏ qua"
+        >
+          Bạn vừa tập trung 25 phút cho <b>{lastFinishedTask || "công việc"}</b>.
+          Thêm 0.5h (khoá giờ) vào kế hoạch hôm nay?
+        </Modal>
+
+        {/* Modal Tóm tắt AI tuần */}
+        <Modal
+          title={<span style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: "8px" }}><RobotOutlined style={{ color: "var(--primary-color)" }} /> Tóm tắt báo cáo công việc tuần</span>}
+          open={weeklySummaryModalOpen}
+          onOk={() => setWeeklySummaryModalOpen(false)}
+          onCancel={() => setWeeklySummaryModalOpen(false)}
+          width={700}
+          footer={[<Button key="ok" type="primary" onClick={() => setWeeklySummaryModalOpen(false)}>Đóng</Button>]}
+        >
+          {isGeneratingSummary ? (
+            <div style={{ padding: "40px", textAlign: "center" }}>
+              <Spin size="large" tip="AI đang tổng hợp dữ liệu và viết tóm tắt tuần..." />
+            </div>
+          ) : (
+            <div style={{ padding: "10px 0" }}>
+              <Input.TextArea 
+                value={weeklySummaryText} 
+                rows={15} 
+                readOnly 
+                style={{ 
+                  background: "var(--bubble-assistant-bg)", 
+                  color: "var(--text-primary)", 
+                  border: "1px solid var(--glass-border)",
+                  fontFamily: "Inter, sans-serif",
+                  fontSize: "14px",
+                  lineHeight: "1.6"
+                }}
+              />
+              <div style={{ marginTop: "16px", textAlign: "right" }}>
+                <Button 
+                  icon={<CopyOutlined />} 
+                  type="primary"
+                  onClick={() => {
+                    navigator.clipboard.writeText(weeklySummaryText);
+                    antdMessage.success("Đã copy tóm tắt tuần vào clipboard!");
+                  }}
+                >
+                  Sao chép báo cáo
+                </Button>
+              </div>
+            </div>
+          )}
+        </Modal>
+
         {/* Modal Ánh xạ Hàng loạt */}
         <Modal
           title={
             <span style={{ fontSize: "16px", fontWeight: 600, display: "flex", alignItems: "center", gap: "8px" }}>
               <RobotOutlined style={{ color: "var(--primary-color)" }} />
-              Duyệt thủ công ánh xạ hàng loạt bằng AI
+              Gắn issue tự động cho các việc chưa gắn
             </span>
           }
           open={isBulkMappingModalOpen}
@@ -2948,7 +3975,7 @@ export default function App() {
             setIsBulkMappingModalOpen(false);
             setBulkMappingSuggestions([]);
           }}
-          okText="Áp dụng ánh xạ hàng loạt"
+          okText={`Áp dụng ${bulkMappingSuggestions.filter((x) => x.approved).length} gợi ý`}
           cancelText="Hủy"
           width={900}
           confirmLoading={isSyncingRedmine}
@@ -2956,12 +3983,12 @@ export default function App() {
           {isBulkMappingLoading ? (
             <div style={{ padding: "50px 0", textAlign: "center" }}>
               <Badge status="processing" color="var(--primary-color)" />
-              <div style={{ marginTop: "12px", color: "var(--text-secondary)" }}>AI đang trích xuất từ khóa, tìm kiếm và phân tích ánh xạ hàng loạt... Vui lòng đợi.</div>
+              <div style={{ marginTop: "12px", color: "var(--text-secondary)" }}>AI đang tìm issue phù hợp cho {tasks.filter((t) => !t.redmineIssue).length} việc…</div>
             </div>
           ) : (
             <div style={{ margin: "16px 0" }}>
               <div style={{ marginBottom: "12px", color: "var(--text-secondary)", fontSize: "13px" }}>
-                AI đã tự động phân tích và tìm kiếm các issue phù hợp trên Redmine cho tất cả task chưa được ánh xạ ngày hôm nay. Hãy duyệt lại, chọn loại ánh xạ hoặc tinh chỉnh mã ID trước khi áp dụng.
+                AI đã tìm issue phù hợp cho từng việc chưa gắn. Kiểm tra lại, tắt những gợi ý không đúng, rồi bấm Áp dụng. Chưa có gì được gửi lên Redmine cho tới khi bạn áp dụng.
               </div>
               
               <Table
@@ -3089,33 +4116,189 @@ export default function App() {
                 ]}
               />
 
-              <div style={{ marginTop: "16px", borderTop: "1px solid var(--glass-border)", paddingTop: "16px" }}>
-                <div style={{ marginBottom: "12px" }}>
-                  <div style={{ marginBottom: "6px", fontWeight: 500 }}>Redmine API Key:</div>
-                  <Input.Password
-                    placeholder="Nhập Redmine API Token"
-                    value={redmineApiKey}
-                    onChange={(e) => setRedmineApiKey(e.target.value)}
-                    iconRender={(visible) => (visible ? <EyeOutlined /> : <EyeInvisibleOutlined />)}
-                  />
-                </div>
-
-                <div>
-                  <div style={{ marginBottom: "6px", fontWeight: 500 }}>Project mặc định:</div>
-                  <Input
-                    placeholder="Nhập ID/Key dự án mặc định (ví dụ: logtime-project)"
-                    value={redmineDefaultProject}
-                    onChange={(e) => setRedmineDefaultProject(e.target.value)}
-                  />
-                  <Text type="secondary" style={{ fontSize: "12px", display: "block", marginTop: "4px" }}>
-                    Dùng làm fallback nếu công việc không có Mã Issue.
-                  </Text>
-                </div>
-              </div>
             </div>
           )}
         </Modal>
+        {/* Pomodoro Timer Floating Widget */}
+        <div style={{ 
+          position: "fixed", 
+          bottom: "30px", 
+          right: "30px", 
+          zIndex: 1000,
+          transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
+        }}>
+          {pomodoroVisible ? (
+            pomodoroMinimized ? (
+              <div 
+                className="glass-panel glow-active"
+                style={{ 
+                  padding: "8px 16px", 
+                  display: "flex", 
+                  alignItems: "center", 
+                  gap: "12px",
+                  cursor: "pointer",
+                  borderRadius: "30px",
+                  boxShadow: "var(--glow-shadow-1)",
+                  border: `1px solid ${pomodoroMode === "work" ? "#ef4444" : "#10b981"}`
+                }}
+                onClick={() => setPomodoroMinimized(false)}
+              >
+                <Badge status="processing" color={pomodoroMode === "work" ? "#ef4444" : "#10b981"} />
+                <span style={{ fontSize: "16px", fontWeight: 700, fontFamily: "monospace" }} className={pomodoroRunning ? "pomodoro-timer-active" : ""}>
+                   {Math.floor(pomodoroSeconds / 60)}:{(pomodoroSeconds % 60).toString().padStart(2, "0")}
+                </span>
+                <Button 
+                  type="text" 
+                  size="small" 
+                  icon={<CloseOutlined style={{ fontSize: "10px" }} />} 
+                  onClick={(e) => { e.stopPropagation(); setPomodoroVisible(false); }} 
+                />
+              </div>
+            ) : (
+              <Card 
+                className="glass-panel" 
+                style={{ 
+                  width: "260px", 
+                  boxShadow: "var(--glow-shadow-2)", 
+                  border: `1px solid ${pomodoroMode === "work" ? "#ef444455" : "#10b98155"}`,
+                  borderRadius: "20px"
+                }}
+                title={
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: "14px", fontWeight: 600, display: "flex", alignItems: "center", gap: "6px" }}>
+                      {pomodoroMode === "work" ? "🍅" : "☕"} Pomodoro
+                    </span>
+                    <Space size={4}>
+                      <Button type="text" size="small" icon={<MinusOutlined />} onClick={() => setPomodoroMinimized(true)} />
+                      <Button type="text" size="small" icon={<CloseOutlined />} onClick={() => setPomodoroVisible(false)} />
+                    </Space>
+                  </div>
+                }
+                size="small"
+                styles={{ body: { padding: "20px" } }}
+              >
+                <div style={{ textAlign: "center" }}>
+                   <div style={{ position: "relative", display: "inline-block", marginBottom: "20px" }}>
+                     <Progress
+                       type="circle"
+                       percent={(pomodoroSeconds / (pomodoroMode === "work" ? 25*60 : 5*60)) * 100}
+                       format={() => (
+                         <div style={{ display: "flex", flexDirection: "column" }} className={pomodoroRunning ? "pomodoro-timer-active" : ""}>
+                           <span style={{ fontSize: "24px", fontWeight: 700, color: "var(--text-primary)", fontFamily: "monospace" }}>
+                             {Math.floor(pomodoroSeconds / 60)}:{(pomodoroSeconds % 60).toString().padStart(2, "0")}
+                           </span>
+                         </div>
+                       )}
+                       width={140}
+                       strokeColor={pomodoroMode === "work" ? "#ef4444" : "#10b981"}
+                       trailColor="rgba(0,0,0,0.05)"
+                       strokeWidth={6}
+                     />
+                   </div>
+
+                   <Input 
+                     placeholder="Tên công việc đang làm..." 
+                     value={pomodoroTask} 
+                     onChange={e => setPomodoroTask(e.target.value)}
+                     disabled={pomodoroRunning}
+                     size="middle"
+                     style={{ 
+                       marginBottom: "16px", 
+                       textAlign: "center",
+                       borderRadius: "8px",
+                       background: "rgba(0,0,0,0.02)", 
+                       border: "1px solid var(--glass-border)" 
+                     }}
+                   />
+
+                   <Space size="middle">
+                     <Button 
+                       type="primary" 
+                       shape="round"
+                       icon={pomodoroRunning ? <PauseOutlined /> : <PlayCircleOutlined />} 
+                       onClick={() => setPomodoroRunning(!pomodoroRunning)}
+                       style={{ 
+                         background: pomodoroMode === "work" ? "#ef4444" : "#10b981",
+                         borderColor: pomodoroMode === "work" ? "#ef4444" : "#10b981",
+                         height: "40px",
+                         paddingLeft: "24px",
+                         paddingRight: "24px"
+                       }}
+                     >
+                       {pomodoroRunning ? "Tạm dừng" : "Bắt đầu"}
+                     </Button>
+                     <Tooltip title="Đặt lại">
+                       <Button 
+                         shape="circle"
+                         icon={<ReloadOutlined />} 
+                         onClick={() => { setPomodoroRunning(false); setPomodoroSeconds(pomodoroMode === "work" ? 25*60 : 5*60); }}
+                         style={{ height: "40px", width: "40px" }}
+                       />
+                     </Tooltip>
+                   </Space>
+
+                   <div style={{ marginTop: "16px", display: "flex", justifyContent: "center", alignItems: "center", gap: "8px" }}>
+                     <div style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                       {pomodoroMode === "work" ? "💻 Tập trung làm việc" : "☕ Nghỉ ngơi giải lao"}
+                     </div>
+                     <Badge 
+                       count={pomodoroSessions} 
+                       overflowCount={99} 
+                       style={{ backgroundColor: "var(--primary-light)", color: "var(--primary-color)", boxShadow: "none", border: "1px solid var(--glass-border)" }} 
+                       title={`Số phiên đã hoàn thành: ${pomodoroSessions}`}
+                     />
+                   </div>
+                </div>
+              </Card>
+            )
+          ) : (
+            <Tooltip title="Pomodoro — hẹn giờ tập trung 25 phút" placement="left">
+              <Button
+                type="primary"
+                shape="circle"
+                size="large"
+                aria-label="Mở Pomodoro"
+                icon={<ClockCircleOutlined />}
+                onClick={() => setPomodoroVisible(true)}
+                style={{
+                  width: "48px",
+                  height: "48px",
+                  display: "flex", 
+                  alignItems: "center", 
+                  justifyContent: "center", 
+                  background: "#ef4444", 
+                  borderColor: "#ef4444",
+                  boxShadow: "0 8px 25px rgba(239, 68, 68, 0.4)",
+                  fontSize: "24px"
+                }}
+              />
+            </Tooltip>
+          )}
+        </div>
       </Layout>
+      {logConfirmEntries && (
+        <LogTimeConfirmModal
+          entries={logConfirmEntries}
+          existingEntries={spentTimeEntries}
+          aiConfig={aiConfig}
+          redmineServer={redmineServer}
+          defaultProject={redmineDefaultProject}
+          onCancel={() => setLogConfirmEntries(null)}
+          onDone={handleLogConfirmDone}
+          onTaskIssueChange={handleTaskIssueChange}
+        />
+      )}
+      {activitySummaryDate && (
+        <ActivitySummaryModal
+          date={activitySummaryDate}
+          aiConfig={aiConfig}
+          existingEntries={spentTimeEntries}
+          plannedTasks={getTasksForDate(activitySummaryDate)}
+          onAddTasks={handleAddTasksToDate}
+          onSummaryChange={handleDaySummaryChange}
+          onClose={() => setActivitySummaryDate(null)}
+        />
+      )}
     </ConfigProvider>
   );
 }

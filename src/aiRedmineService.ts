@@ -1,17 +1,4 @@
-import OpenAI from "openai";
-
-const DEFAULT_API_KEY = "";
-const BASE_URL = window.location.origin + "/api-z";
-const MODEL_NAME = "glm-4.7-flash";
-
-function getOpenAIClient(customApiKey?: string) {
-  const apiKey = customApiKey || DEFAULT_API_KEY;
-  return new OpenAI({
-    apiKey: apiKey,
-    baseURL: BASE_URL,
-    dangerouslyAllowBrowser: true,
-  });
-}
+import { chatJson, type AiConfig } from "./aiClient";
 
 export interface RedmineMatchSuggestion {
   type: "direct" | "subtask" | "none";
@@ -31,10 +18,8 @@ export interface RedmineMatchSuggestion {
 export async function analyzeRedmineMapping(
   taskName: string,
   candidates: any[],
-  customApiKey?: string
+  ai: AiConfig
 ): Promise<RedmineMatchSuggestion> {
-  const openai = getOpenAIClient(customApiKey);
-
   const systemPrompt = `Bạn là một chuyên gia phân tích công việc Redmine và hỗ trợ quản lý dự án.
 Nhiệm vụ của bạn là nhận tên công việc hiện tại (\`taskName\`) và danh sách các Issue (\`candidates\`) hiện có từ Redmine.
 Hãy phân tích xem công việc này có khớp trực tiếp với một Issue nào đó không, hoặc nếu không khớp trực tiếp thì có nên tạo một Subtask (con) dưới một Issue cha (Parent task) nào đó không.
@@ -42,7 +27,8 @@ Hãy phân tích xem công việc này có khớp trực tiếp với một Issu
 Nguyên tắc phân tích:
 1. **Direct Match (Khớp trực tiếp)**: Nếu tên công việc và một issue trong danh sách candidates có ý nghĩa trùng khớp hoàn toàn hoặc gần như giống hệt nhau (ví dụ: "fix bug login" và "Sửa lỗi đăng nhập"), hãy chọn issue đó.
 2. **Subtask Match (Khớp làm subtask)**: Nếu công việc là một phần nhỏ hơn, một hành động con (ví dụ: "Viết API cho module X", "Vẽ giao diện module X") nằm dưới một Issue lớn hơn hoặc Epic/Task Group trong danh sách candidates (ví dụ: "Module X", "Phát triển tính năng X"), hãy gợi ý tạo một subtask dưới issue cha này.
-3. **None (Không khớp)**: Nếu không tìm thấy bất kỳ issue nào liên quan để làm cha hoặc khớp trực tiếp, trả về type: "none".
+3. **Chỉ log vào task lá**: Nếu một issue là cha của issue khác trong danh sách (có issue khác mang \`parentId\` trỏ tới nó), không chọn nó làm Direct Match — hãy chọn task con phù hợp, hoặc gợi ý Subtask dưới nó.
+4. **None (Không khớp)**: Nếu không tìm thấy bất kỳ issue nào liên quan để làm cha hoặc khớp trực tiếp, trả về type: "none".
 
 Hãy trả về kết quả dưới định dạng JSON với cấu trúc sau:
 \`\`\`json
@@ -61,27 +47,22 @@ Hãy trả về kết quả dưới định dạng JSON với cấu trúc sau:
 
 Lưu ý: Chỉ trả về JSON hợp lệ, không viết thêm text gì ngoài JSON đó.`;
 
-  const response = await openai.chat.completions.create({
-    model: MODEL_NAME,
-    messages: [
-      { role: "system", content: systemPrompt },
-      {
-        role: "user",
-        content: `Tên công việc: "${taskName}"\nDanh sách các Issue ứng viên:\n${JSON.stringify(
-          candidates.map((issue) => ({
-            id: issue.id,
-            subject: issue.subject,
-            project: issue.project,
-            tracker: issue.tracker,
-            status: issue.status,
-          }))
-        )}`,
-      },
-    ],
-    response_format: { type: "json_object" },
-  });
-
-  const resultText = response.choices[0].message.content || "";
+  const resultText = await chatJson(ai, [
+    { role: "system", content: systemPrompt },
+    {
+      role: "user",
+      content: `Tên công việc: "${taskName}"\nDanh sách các Issue ứng viên:\n${JSON.stringify(
+        candidates.map((issue) => ({
+          id: issue.id,
+          subject: issue.subject,
+          project: issue.project,
+          tracker: issue.tracker,
+          status: issue.status,
+          parentId: issue.parent?.id,
+        }))
+      )}`,
+    },
+  ]);
   try {
     return JSON.parse(resultText) as RedmineMatchSuggestion;
   } catch (error) {
@@ -99,10 +80,8 @@ Lưu ý: Chỉ trả về JSON hợp lệ, không viết thêm text gì ngoài J
  */
 export async function extractSearchQuery(
   taskName: string,
-  customApiKey?: string
+  ai: AiConfig
 ): Promise<string> {
-  const openai = getOpenAIClient(customApiKey);
-
   const systemPrompt = `Nhiệm vụ của bạn là trích xuất 1 đến 3 từ khóa tiếng Việt hoặc tiếng Anh cốt lõi từ tiêu đề công việc thô để dùng làm từ khóa tìm kiếm (search query) trên Redmine.
 Từ khóa phải mô tả chủ đề chính của công việc (ví dụ: "BE - Thông báo vào google chat khi số lượng voucher sắp hết" -> "voucher" hoặc "thông báo google chat").
 Không giữ lại các tiền tố như "BE -", "FE -", "Fix bug -", "Hotfix:".
@@ -116,15 +95,10 @@ Trả về JSON định dạng:
 Chỉ trả về JSON.`;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: MODEL_NAME,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: `Tiêu đề: "${taskName}"` },
-      ],
-      response_format: { type: "json_object" },
-    });
-    const resultText = response.choices[0].message.content || "";
+    const resultText = await chatJson(ai, [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: `Tiêu đề: "${taskName}"` },
+    ]);
     const data = JSON.parse(resultText);
     return data.query || taskName;
   } catch (e) {

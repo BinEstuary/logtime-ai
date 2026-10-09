@@ -1,0 +1,8 @@
+{
+  "uuid": "logtime-window@estuary.solutions",
+  "name": "LogTime AI – Active Window",
+  "description": "Cho phép app LogTime AI đọc tên app và tiêu đề cửa sổ đang được focus (qua D-Bus, chỉ trên máy) để tổng hợp thời gian làm việc.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "url": "https://estuary.solutions",
+  "version": 1
+}

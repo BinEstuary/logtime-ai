@@ -1,35 +1,131 @@
 {
   "name": "logtime",
+  "productName": "LogTime AI",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "Trợ lý LogTime AI cho Redmine",
+  "author": {
+    "name": "Estuary Solutions",
+    "email": "ybin.nguyen@estuary.solutions"
+  },
+  "homepage": "https://estuary.solutions",
+  "desktopName": "logtime-ai.desktop",
   "type": "module",
+  "main": "dist-electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:electron": "esbuild electron/main.ts --bundle --platform=node --format=cjs --target=node22 --external:electron --outfile=dist-electron/main.cjs",
+    "build:redmine": "node scripts/build-redmine.mjs",
+    "desktop": "npm run build && npm run build:electron && electron .",
+    "dist:linux": "npm run build && npm run build:electron && node scripts/build-redmine.mjs linux-x64 && electron-builder --linux --x64",
+    "dist:win": "npm run build && npm run build:electron && node scripts/build-redmine.mjs win32-x64 && electron-builder --win --x64",
+    "dist:mac": "npm run build && npm run build:electron && node scripts/build-redmine.mjs darwin-x64 darwin-arm64 && electron-builder --mac --x64 --arm64",
+    "download-page": "node scripts/make-download-data.mjs"
   },
-  "dependencies": {
-    "@ant-design/icons": "^6.2.3",
-    "antd": "^6.4.3",
-    "canvas-confetti": "^1.9.4",
-    "openai": "^6.38.0",
-    "react": "^19.2.6",
-    "react-dom": "^19.2.6"
-  },
+  "dependencies": {},
   "devDependencies": {
+    "@ant-design/icons": "^6.2.3",
     "@eslint/js": "^10.0.1",
     "@types/canvas-confetti": "^1.9.0",
     "@types/node": "^24.12.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "antd": "^6.4.3",
+    "canvas-confetti": "^1.9.4",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
     "eslint": "^10.3.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.6.0",
+    "groq-sdk": "^1.2.1",
+    "openai": "^6.38.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "recharts": "^3.8.1",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.59.2",
     "vite": "^8.0.12"
+  },
+  "build": {
+    "appId": "solutions.estuary.logtime",
+    "productName": "LogTime AI",
+    "copyright": "Copyright © 2026 Estuary Solutions",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "artifactName": "LogTime-AI-${version}-${os}-${arch}.${ext}",
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Office",
+      "icon": "build/icons",
+      "maintainer": "Estuary Solutions <ybin.nguyen@estuary.solutions>",
+      "syncDesktopName": true,
+      "executableName": "logtime-ai",
+      "extraResources": [
+        {
+          "from": "build/bin/linux-${arch}",
+          "to": "bin",
+          "filter": [
+            "redmine*"
+          ]
+        },
+        {
+          "from": "gnome-extension",
+          "to": "gnome-extension"
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.png",
+      "extraResources": [
+        {
+          "from": "build/bin/win32-${arch}",
+          "to": "bin",
+          "filter": [
+            "redmine*"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png",
+      "extraResources": [
+        {
+          "from": "build/bin/darwin-${arch}",
+          "to": "bin",
+          "filter": [
+            "redmine*"
+          ]
+        }
+      ]
+    }
   }
 }
