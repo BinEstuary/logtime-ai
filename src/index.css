@@ -602,6 +602,15 @@ body {
   border-color: var(--primary-hover) !important;
   color: var(--bubble-user-text) !important;
 }
+/* Nút bị khoá phải trông khác nút bấm được (không để !important ở trên ghi đè trạng thái disabled) */
+.ant-btn-primary:disabled,
+.ant-btn-primary.ant-btn-disabled {
+  background-color: var(--surface-muted) !important;
+  border-color: var(--border-color, transparent) !important;
+  color: var(--text-secondary) !important;
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 
 .ant-btn-link, .ant-btn-text {
   color: var(--text-primary) !important;
@@ -720,4 +729,36 @@ body {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Cây tóm tắt hoạt động trong thẻ ngày: co giãn trong thẻ, tên dài bị cắt bằng dấu … thay vì tràn ngang */
+.day-summary-tree,
+.day-summary-tree .ant-tree-treenode,
+.day-summary-tree .ant-tree-node-content-wrapper {
+  min-width: 0;
+  max-width: 100%;
+}
+.day-summary-tree .ant-tree-node-content-wrapper {
+  overflow: hidden;
+  white-space: normal;
+}
+.day-summary-tree .ant-tree-title {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+.day-summary-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+}
+.day-summary-row > .ant-typography {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.day-summary-row > .ant-tag {
+  flex-shrink: 0;
 }

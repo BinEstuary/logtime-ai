@@ -11,6 +11,7 @@ export interface Task {
   redmineIssue?: number; // Mã Issue trên Redmine
   redmineProject?: string; // Tên/ID dự án trên Redmine
   isRecurring?: boolean; // Tự động lặp lại mỗi tuần
+  loggedAt?: string; // Đã log thành công lên Redmine (ISO time) — không log lại
 }
 
 export interface ChatMessage {

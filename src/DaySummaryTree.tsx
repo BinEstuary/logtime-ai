@@ -84,7 +84,12 @@ export default function DaySummaryTree({ summary, projects, onCreateRows, onOpen
         hours: row.hours,
         children: [],
         title: (
-          <div style={{ display: "flex", alignItems: "center", gap: 4, opacity: row.added ? 0.55 : 1 }}>
+          <div className="day-summary-row" style={{ opacity: row.added ? 0.55 : 1 }}>
+            {row.redmineIssue && (
+              <Tag style={{ margin: 0, fontSize: 11 }} color="blue">
+                #{row.redmineIssue}
+              </Tag>
+            )}
             <Tooltip title={row.evidence || row.name}>
               <Text style={{ fontSize: 12, flex: 1, minWidth: 0 }} ellipsis delete={row.added}>
                 {row.name}
@@ -156,7 +161,7 @@ export default function DaySummaryTree({ summary, projects, onCreateRows, onOpen
           {summary.overview}
         </Text>
       )}
-      <Tree key={`${summary.createdAt}-${projects.length}`} showLine blockNode selectable={false} defaultExpandAll treeData={treeData} style={{ fontSize: 12, background: "transparent" }} />
+      <Tree key={`${summary.createdAt}-${projects.length}`} className="day-summary-tree" showLine blockNode selectable={false} defaultExpandAll treeData={treeData} style={{ fontSize: 12, background: "transparent" }} />
       {pendingRows.length > 0 && (
         <Button size="small" type="dashed" block icon={<PlusOutlined />} style={{ marginTop: 6 }} onClick={() => onCreateRows(pendingRows)}>
           Tạo {pendingRows.length} task ({pendingHours.toFixed(1)}h)

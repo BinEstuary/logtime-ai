@@ -8,6 +8,8 @@ export interface SummaryRow {
   hours: number;
   evidence: string;
   redmineProject?: string;
+  /** Task (issue) cụ thể của dự án, có thể là task con */
+  redmineIssue?: number;
   /** Đã thêm thành task trong kế hoạch của ngày */
   added?: boolean;
 }
@@ -49,5 +51,6 @@ export function summaryRowToTask(row: SummaryRow): Task {
     isLocked: true,
     aiReason: `Tóm tắt hoạt động (${row.workspace}): ${row.evidence}`,
     redmineProject: row.redmineProject,
+    redmineIssue: row.redmineIssue,
   };
 }

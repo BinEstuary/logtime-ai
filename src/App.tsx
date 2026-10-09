@@ -431,6 +431,8 @@ export default function App() {
   // Tóm tắt hoạt động đã lưu theo ngày (undefined = chưa đọc từ localStorage)
   const [daySummaries, setDaySummaries] = useState<Record<string, StoredDaySummary | null>>({});
   const [redmineProjectList, setRedmineProjectList] = useState<any[]>([]);
+  // Các dòng tóm tắt đang được tạo thành task (ref để chặn bấm nhanh trùng lặp)
+  const creatingSummaryKeys = useRef(new Set<string>());
 
   // 4. Project Targets
   const [projectTargets, setProjectTargets] = useState<Record<string, number>>(() => {
@@ -1126,7 +1128,12 @@ export default function App() {
   };
 
   // Mọi lần log đều qua modal xác nhận dạng cây (Project › Task › Task con) trước khi gửi Redmine
-  const openLogConfirm = (entries: LogEntryInput[]) => {
+  const openLogConfirm = (allEntries: LogEntryInput[]) => {
+    // Task đã log thành công thì không log lại
+    const entries = allEntries.filter((e) => !e.task.loggedAt);
+    if (entries.length < allEntries.length) {
+      antdMessage.info(`Bỏ qua ${allEntries.length - entries.length} công việc đã log trước đó.`);
+    }
     if (entries.length === 0) {
       antdMessage.warning("Chưa có công việc nào có số giờ lớn hơn 0 để log.");
       return;
@@ -1140,8 +1147,19 @@ export default function App() {
       list.map((t) => (t.id === taskId ? { ...t, redmineIssue: issueId, redmineProject: projectName || t.redmineProject } : t));
     const saved = localStorage.getItem(`logtime_tasks_${date}`);
     if (saved) localStorage.setItem(`logtime_tasks_${date}`, JSON.stringify(apply(JSON.parse(saved) as Task[])));
-    setWeeklyTasks((prev) => (prev[date] ? { ...prev, [date]: apply(prev[date]) } : prev));
+    // Luôn tạo object mới để giao diện cập nhật ngay (kể cả ngày chưa có trong weeklyTasks)
+    setWeeklyTasks((prev) => (prev[date] ? { ...prev, [date]: apply(prev[date]) } : { ...prev }));
     if (date === selectedDate) setTasks((prev) => apply(prev));
+  };
+
+  // Đánh dấu task đã log thành công để không hiện trong "Kế hoạch chưa log" và không log lại
+  const handleTaskLogged = (date: string, taskId: string) => {
+    const loggedAt = new Date().toISOString();
+    const mark = (list: Task[]) => list.map((t) => (t.id === taskId ? { ...t, loggedAt } : t));
+    const saved = localStorage.getItem(`logtime_tasks_${date}`);
+    if (saved) localStorage.setItem(`logtime_tasks_${date}`, JSON.stringify(mark(JSON.parse(saved) as Task[])));
+    setWeeklyTasks((prev) => (prev[date] ? { ...prev, [date]: mark(prev[date]) } : prev));
+    if (date === selectedDate) setTasks((prev) => mark(prev));
   };
 
   // Thêm task (từ tóm tắt hoạt động) vào kế hoạch của một ngày
@@ -1162,9 +1180,13 @@ export default function App() {
   };
 
   // Tạo task từ các dòng tóm tắt trên thẻ ngày rồi đánh dấu đã tạo
-  const handleCreateSummaryRows = (date: string, rows: SummaryRow[]) => {
+  const handleCreateSummaryRows = (date: string, requested: SummaryRow[]) => {
     const summary = getDaySummary(date);
     if (!summary) return;
+    // Bỏ dòng đã tạo hoặc đang tạo (bấm nhanh 2 lần trước khi giao diện kịp cập nhật)
+    const rows = requested.filter((r) => !r.added && !creatingSummaryKeys.current.has(`${date}:${r.key}`));
+    if (rows.length === 0) return;
+    rows.forEach((r) => creatingSummaryKeys.current.add(`${date}:${r.key}`));
     handleAddTasksToDate(date, rows.map(summaryRowToTask));
     const keys = new Set(rows.map((r) => r.key));
     handleDaySummaryChange(date, { ...summary, rows: summary.rows.map((r) => (keys.has(r.key) ? { ...r, added: true } : r)) });
@@ -3237,7 +3259,7 @@ export default function App() {
                       <Row gutter={[16, 16]}>
                         {paginatedDates.map((date) => {
                           const entries = groupedSpentTime[date];
-                          const localTasks = getTasksForDate(date);
+                          const localTasks = getTasksForDate(date).filter((t) => !t.loggedAt);
                           const daySummary = dayjs(date).day() % 6 === 0 ? null : getDaySummary(date);
                           const totalDailyHours = entries.reduce((sum, e) => sum + (e.hours || 0), 0);
                           const dayOfWeek = dayjs(date).day(); // 0: Chủ Nhật, 6: Thứ Bảy
@@ -4286,6 +4308,7 @@ export default function App() {
           onCancel={() => setLogConfirmEntries(null)}
           onDone={handleLogConfirmDone}
           onTaskIssueChange={handleTaskIssueChange}
+          onTaskLogged={handleTaskLogged}
         />
       )}
       {activitySummaryDate && (

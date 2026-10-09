@@ -102,6 +102,10 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
   const [loadError, setLoadError] = useState<string>();
   const [isLoading, setIsLoading] = useState(true);
   const [redmineProjects, setRedmineProjects] = useState<string[]>([]);
+  // Project Redmine (đủ id/parent) và danh sách task của từng project, tải khi người dùng chọn project
+  const [projectList, setProjectList] = useState<any[]>([]);
+  const [issuesByProject, setIssuesByProject] = useState<Record<string, any[]>>({});
+  const [loadingProject, setLoadingProject] = useState<string>();
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [summary, setSummary] = useState<DayActivitySummary | null>(stored ? { overview: stored.overview, projects: [] } : null);
   const [rows, setRows] = useState<SuggestionRow[]>(() => (stored?.rows || []).map((r) => ({ ...r, checked: !r.added })));
@@ -115,6 +119,7 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
         hours: r.hours,
         evidence: r.evidence,
         redmineProject: r.redmineProject,
+        redmineIssue: r.redmineIssue,
         added: r.added,
       })),
     };
@@ -140,7 +145,11 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
       .catch((e) => setLoadError(e.message))
       .finally(() => setIsLoading(false));
     get("/api/redmine/projects")
-      .then((list) => Array.isArray(list) && setRedmineProjects(list.map((p: any) => p.name)))
+      .then((list) => {
+        if (!Array.isArray(list)) return;
+        setProjectList(list);
+        setRedmineProjects(list.map((p: any) => p.name));
+      })
       .catch(() => undefined);
   }, [date]);
 
@@ -217,7 +226,10 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
         },
         aiConfig
       );
-      const nextRows: SuggestionRow[] = result.projects.flatMap((p, pi) =>
+      // Giữ các dòng đã tạo thành task; không thêm lại gợi ý trùng tên với chúng
+      const keptRows = rows.filter((r) => r.added);
+      const keptNames = new Set(keptRows.map((r) => r.name.trim().toLowerCase()));
+      const freshRows: SuggestionRow[] = result.projects.flatMap((p, pi) =>
         p.tasks.map((t, ti) => ({
           key: `${Date.now()}-${pi}-${ti}`,
           workspace: p.workspace,
@@ -227,7 +239,8 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
           evidence: t.evidence,
           redmineProject: p.redmineProjectGuess && redmineProjects.includes(p.redmineProjectGuess) ? p.redmineProjectGuess : undefined,
         }))
-      );
+      ).filter((r) => !keptNames.has(r.name.trim().toLowerCase()));
+      const nextRows: SuggestionRow[] = [...keptRows, ...freshRows];
       const at = new Date().toISOString();
       setSummary(result);
       setRows(nextRows);
@@ -238,6 +251,41 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
     } finally {
       setIsSummarizing(false);
     }
+  };
+
+  // Tải task (issue) của một project, gồm cả task con (search mặc định bao gồm subproject)
+  const loadProjectIssues = async (projectName: string) => {
+    const project = projectList.find((p) => p.name === projectName);
+    if (!project || issuesByProject[projectName]) return;
+    setLoadingProject(projectName);
+    try {
+      const res = await fetch("/api/redmine/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: project.id, status: "open", limit: 100 }),
+      });
+      const issues = await res.json();
+      setIssuesByProject((prev) => ({ ...prev, [projectName]: Array.isArray(issues) ? issues : [] }));
+    } catch {
+      setIssuesByProject((prev) => ({ ...prev, [projectName]: [] }));
+    } finally {
+      setLoadingProject(undefined);
+    }
+  };
+
+  // Đổi project thì bỏ task đang chọn nếu nó không thuộc project mới
+  // Dòng đã có dự án (từ AI hoặc lưu trước đó) thì tải sẵn danh sách task của dự án đó
+  useEffect(() => {
+    if (projectList.length === 0) return;
+    [...new Set(rows.map((r) => r.redmineProject).filter(Boolean) as string[])].forEach((name) => void loadProjectIssues(name));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, projectList]);
+
+  const setRowProject = (row: SuggestionRow, projectName?: string) => {
+    const issues = projectName ? issuesByProject[projectName] : undefined;
+    const keepIssue = !!issues && issues.some((i) => i.id === row.redmineIssue);
+    patchRow(row.key, { redmineProject: projectName, redmineIssue: keepIssue ? row.redmineIssue : undefined });
+    if (projectName) void loadProjectIssues(projectName);
   };
 
   const patchRow = (key: string, patch: Partial<SuggestionRow>) => setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
@@ -469,13 +517,14 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
                         <div key={r.key} style={{ display: "flex", flexDirection: "column", gap: 2, padding: "6px 0 6px 18px" }}>
                           <Space wrap size={6}>
                             <Checkbox checked={r.checked} disabled={r.added} onChange={(e) => patchRow(r.key, { checked: e.target.checked })} />
-                            <Input size="small" style={{ width: 340 }} value={r.name} onChange={(e) => patchRow(r.key, { name: e.target.value })} />
+                            <Input size="small" style={{ width: 340 }} value={r.name} disabled={r.added} onChange={(e) => patchRow(r.key, { name: e.target.value })} />
                             <InputNumber
                               size="small"
                               min={0.5}
                               max={8}
                               step={0.5}
                               value={r.hours}
+                              disabled={r.added}
                               onChange={(v) => patchRow(r.key, { hours: v || 0.5 })}
                               suffix="h"
                               style={{ width: 80 }}
@@ -484,11 +533,37 @@ export default function ActivitySummaryModal({ date, aiConfig, existingEntries, 
                               size="small"
                               allowClear
                               showSearch
+                              disabled={r.added}
                               placeholder="Dự án Redmine"
                               style={{ width: 220 }}
                               value={r.redmineProject}
-                              onChange={(v) => patchRow(r.key, { redmineProject: v })}
+                              onChange={(v) => setRowProject(r, v)}
                               options={redmineProjects.map((p) => ({ value: p, label: p }))}
+                            />
+                            <Select
+                              size="small"
+                              allowClear
+                              showSearch
+                              disabled={r.added || !r.redmineProject}
+                              loading={loadingProject === r.redmineProject}
+                              placeholder={r.redmineProject ? "Task của dự án…" : "Chọn dự án trước"}
+                              style={{ width: 300 }}
+                              value={r.redmineIssue}
+                              optionFilterProp="label"
+                              onChange={(v) => patchRow(r.key, { redmineIssue: v ?? undefined })}
+                              options={(() => {
+                                const list: any[] = issuesByProject[r.redmineProject || ""] || [];
+                                // Issue có task con trong danh sách là issue cha: không log trực tiếp vào đó
+                                const parentIds = new Set(list.map((i) => i.parent?.id).filter(Boolean));
+                                return list.map((i: any) => {
+                                  const isParent = parentIds.has(i.id);
+                                  return {
+                                    value: i.id,
+                                    disabled: isParent,
+                                    label: `#${i.id} ${i.subject}${i.parent?.id ? ` (con của #${i.parent.id})` : ""}${isParent ? " — có task con, chọn task con" : ""}`,
+                                  };
+                                });
+                              })()}
                             />
                             {r.added && <Tag color="success">Đã tạo task</Tag>}
                           </Space>

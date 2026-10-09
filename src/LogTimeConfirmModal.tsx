@@ -53,6 +53,8 @@ interface Props {
   defaultProject?: string;
   onCancel: () => void;
   onDone: () => void;
+  /** Gọi ngay khi một entry log thành công, để task không bị log lại */
+  onTaskLogged: (date: string, taskId: string) => void;
   onTaskIssueChange: (date: string, taskId: string, issueId: number, projectName?: string) => void;
 }
 
@@ -60,6 +62,9 @@ const postJson = async (url: string, body: unknown) => {
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   return res.json();
 };
+
+/** Giờ hiển thị tối đa 2 chữ số thập phân, bỏ số 0 thừa (0.25 → 0.25, 2 → 2) */
+const fmtHours = (h: number) => String(Number((h || 0).toFixed(2)));
 
 const issueLabel = (issue: any) => `#${issue.id} ${issue.subject || ""}`.trim();
 
@@ -90,6 +95,7 @@ export default function LogTimeConfirmModal({
   defaultProject,
   onCancel,
   onDone,
+  onTaskLogged,
   onTaskIssueChange,
 }: Props) {
   const [initialRows] = useState(() => buildInitialRows(entries));
@@ -183,9 +189,19 @@ export default function LogTimeConfirmModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Dòng log lỗi: đánh giá lại trạng thái để người dùng chọn lại task rồi thử lại, không phải đóng modal
+  const recoverRow = async (row: Row, error: string) => {
+    const issue = row.issueId ? await resolveRow(row.key, row.issueId, true) : undefined;
+    patchRow(row.key, { error: error || "Lỗi không xác định" });
+    if (!issue && row.issueId) patchRow(row.key, { status: "no_issue" });
+  };
+
   const applyIssue = async (row: Row, issueId: number) => {
     const issue = await resolveRow(row.key, issueId);
-    if (issue) onTaskIssueChange(row.date, row.task.id, issue.id, issue.project?.name);
+    // Chỉ ghi vào task khi issue là task lá; chọn issue cha thì chờ chọn task con
+    if (issue && !(Array.isArray(issue.children) && issue.children.length > 0)) {
+      onTaskIssueChange(row.date, row.task.id, issue.id, issue.project?.name);
+    }
   };
 
   const createChildTask = async (row: Row, parent: { id: number; projectId?: number }, subject: string) => {
@@ -239,7 +255,7 @@ export default function LogTimeConfirmModal({
       showSearch
       allowClear
       placeholder={placeholder}
-      style={{ minWidth: 280 }}
+      style={{ width: "min(320px, 100%)" }}
       filterOption={false}
       onSearch={options === searchOptions ? handleSearch : undefined}
       optionFilterProp="label"
@@ -296,10 +312,10 @@ export default function LogTimeConfirmModal({
         <Space size={6} wrap>
           {statusIcon(r)}
           <Tag color="blue">{dayjs(r.date).locale("vi").format("dd DD/MM")}</Tag>
-          <Tag color="purple">{(r.task.duration || 0).toFixed(1)}h</Tag>
+          <Tag color="purple">{fmtHours(r.task.duration)}h</Tag>
           <Text strong style={{ fontSize: 13 }}>{r.task.name}</Text>
           {r.status === "logged" && <Tag color="success">Đã log</Tag>}
-          {r.status === "failed" && <Tag color="error">Lỗi: {r.error}</Tag>}
+          {r.error && r.status !== "logged" && r.status !== "invalid" && <Tag color="error">Lỗi: {r.error}</Tag>}
           {r.status === "invalid" && <Tag color="error">{r.error}</Tag>}
           {!r.excluded && isDuplicate(r) && r.status !== "logged" && (
             <Tooltip title="Ngày này đã có entry cùng task và nội dung trên Redmine">
@@ -338,7 +354,7 @@ export default function LogTimeConfirmModal({
               {issueSelect(r, r.children, r.children.length ? "Chọn task con đang mở..." : "Không có task con đang mở")}
               <Input
                 size="small"
-                style={{ width: 240 }}
+                style={{ width: "min(240px, 100%)" }}
                 value={r.newSubject}
                 onChange={(e) => patchRow(r.key, { newSubject: e.target.value })}
                 placeholder="Tên task con mới"
@@ -489,6 +505,7 @@ export default function LogTimeConfirmModal({
   }, [treeData]);
 
   const pending = rows.filter((r) => !r.excluded && r.status !== "logged");
+  const logged = rows.filter((r) => r.status === "logged").length;
   const blocked = pending.filter((r) => r.status !== "ok");
   const pendingHours = pending.reduce((s, r) => s + (r.task.duration || 0), 0);
   const overDays = Object.entries(dailyTotals).filter(([, t]) => t.existing + t.pending > 8);
@@ -508,13 +525,14 @@ export default function LogTimeConfirmModal({
         if (data.success) {
           ok++;
           patchRow(r.key, { status: "logged", error: undefined });
+          onTaskLogged(r.date, r.task.id);
         } else {
           fail++;
-          patchRow(r.key, { status: "failed", error: data.error });
+          await recoverRow(r, data.error);
         }
       } catch (e: any) {
         fail++;
-        patchRow(r.key, { status: "failed", error: e.message });
+        await recoverRow(r, e.message);
       }
     }
     setIsLogging(false);
@@ -552,7 +570,7 @@ export default function LogTimeConfirmModal({
           disabled={pending.length === 0 || blocked.length > 0}
           onClick={handleConfirm}
         >
-          Xác nhận & Log {pending.length} entry ({pendingHours.toFixed(1)}h)
+          Xác nhận & Log {pending.length} entry ({fmtHours(pendingHours)}h)
         </Button>,
       ]}
     >
@@ -560,13 +578,17 @@ export default function LogTimeConfirmModal({
         <Alert
           type="info"
           showIcon
-          title="Mỗi entry phải nằm trong một task lá của dự án. Kiểm tra đúng dự án › task › task con rồi mới bấm Xác nhận — chưa có gì được gửi lên Redmine."
+          title={
+            logged > 0
+              ? `Đã log ${logged} entry. Các entry còn lại chưa được gửi; xử lý rồi bấm Xác nhận để log tiếp.`
+              : "Mỗi entry phải nằm trong một task lá của dự án. Kiểm tra đúng dự án › task › task con rồi mới bấm Xác nhận — chưa có gì được gửi lên Redmine."
+          }
         />
         {blocked.length > 0 && (
           <Alert
             type="warning"
             showIcon
-            title={`${blocked.length} entry chưa hợp lệ (chưa gắn task, cần chọn task con, hoặc ngày/giờ không hợp lệ). Xử lý hoặc "Bỏ qua" để tiếp tục.`}
+            title={`${blocked.length} entry chưa sẵn sàng (chưa gắn task, cần chọn task con, lỗi khi log, hoặc ngày/giờ không hợp lệ). Xử lý hoặc "Bỏ qua" để tiếp tục.`}
           />
         )}
         {overDays.length > 0 && (
@@ -574,7 +596,7 @@ export default function LogTimeConfirmModal({
             type="warning"
             showIcon
             title={`Vượt 8h/ngày: ${overDays
-              .map(([d, t]) => `${dayjs(d).format("DD/MM")} (${t.existing.toFixed(1)}h đã log + ${t.pending.toFixed(1)}h mới)`)
+              .map(([d, t]) => `${dayjs(d).format("DD/MM")} (${fmtHours(t.existing)}h đã log + ${fmtHours(t.pending)}h mới)`)
               .join(", ")}`}
           />
         )}
